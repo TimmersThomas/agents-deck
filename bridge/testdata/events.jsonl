@@ -1,0 +1,5 @@
+{"name":"agent.hook.SessionStart","seq":1,"occurred_at":"2026-10-18T10:00:00.000Z","workspace_id":"W1","surface_id":"S1","payload":{"hook_event_name":"SessionStart","cwd":"/w/projects/frontend/worktrees/DEV-1-fix"}}
+{"name":"sidebar.metadata.updated","seq":2,"occurred_at":"2026-10-18T10:00:05.000Z","workspace_id":null,"surface_id":null,"payload":{"command":"set_status","args":"claude_code Running --icon=bolt.fill --color=#4C8DFF --tab=W1 --panel=S1 --work=running"}}
+{"name":"window.keyed","seq":3,"occurred_at":"2026-10-18T10:00:06.000Z","workspace_id":"W1","surface_id":null,"payload":{"is_key_window":true}}
+{"name":"sidebar.metadata.updated","seq":4,"occurred_at":"2026-10-18T10:00:30.000Z","workspace_id":null,"surface_id":null,"payload":{"command":"set_status","args":"claude_code Needs input --icon=bell.fill --color=#4C8DFF --tab=W1 --panel=S1 --pid=4952"}}
+{"name":"sidebar.metadata.updated","seq":5,"occurred_at":"2026-10-18T10:01:00.000Z","workspace_id":null,"surface_id":null,"payload":{"command":"set_status","args":"claude_code Idle --icon=pause.circle.fill --color=#8E8E93 --tab=W1 --panel=S1"}}
