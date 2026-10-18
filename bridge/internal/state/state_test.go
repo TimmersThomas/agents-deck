@@ -104,3 +104,57 @@ func TestPruneDropsStaleCardsOfAnyStatus(t *testing.T) {
 		t.Fatalf("got %+v", cards)
 	}
 }
+
+func TestHookDoesNotMutateInput(t *testing.T) {
+	a := Apply(State{}, status("Running", "S1", t0))
+	b := Apply(a, hook("S1", "/w/DEV-2"))
+	if got := a.Cards()[0].Title; got != "S1" {
+		t.Fatalf("input title mutated: %q", got)
+	}
+	if got := b.Cards()[0].Title; got != "DEV-2" {
+		t.Fatalf("hook title %q", got)
+	}
+}
+
+func TestPruneDoesNotMutateInput(t *testing.T) {
+	s := Apply(State{}, status("Running", "S1", t0))
+	pruned := Prune(s, t0.Add(100*time.Hour), time.Minute)
+	if n := len(pruned.Cards()); n != 0 {
+		t.Fatalf("pruned state has %d cards", n)
+	}
+	if n := len(s.Cards()); n != 1 {
+		t.Fatalf("input cards mutated: %d", n)
+	}
+}
+
+func TestPruneKeepsTitleOfSurvivingCard(t *testing.T) {
+	s := Apply(State{}, status("Running", "S1", t0))
+	s = Apply(s, hook("S1", "/w/DEV-3"))
+	s = Prune(s, t0, time.Hour)
+	cards := s.Cards()
+	if len(cards) != 1 || cards[0].Title != "DEV-3" {
+		t.Fatalf("got %+v", cards)
+	}
+}
+
+func TestSameStatusAndTimeSortByID(t *testing.T) {
+	s := Apply(State{}, status("Idle", "b", t0))
+	s = Apply(s, status("Idle", "a", t0))
+	cards := s.Cards()
+	if len(cards) != 2 || cards[0].ID != "a" || cards[1].ID != "b" {
+		t.Fatalf("order %+v want a, b", cards)
+	}
+}
+
+func TestHookOnExistingCardKeepsStatusAndSince(t *testing.T) {
+	s := Apply(State{}, status("Running", "S1", t0))
+	s = Apply(s, hook("S1", "/w/DEV-4"))
+	s = Apply(s, events.Event{Name: "agent.hook.Stop", Hook: "Stop", SurfaceID: "S1", Cwd: "/w/DEV-4", At: t0.Add(time.Hour)})
+	c := s.Cards()[0]
+	if c.Status != protocol.Working {
+		t.Fatalf("status %s", c.Status)
+	}
+	if c.SinceMs != t0.UnixMilli() {
+		t.Fatalf("since %d want %d", c.SinceMs, t0.UnixMilli())
+	}
+}
