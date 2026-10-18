@@ -106,9 +106,10 @@ func TestPruneDropsStaleCardsOfAnyStatus(t *testing.T) {
 }
 
 func TestHookDoesNotMutateInput(t *testing.T) {
-	a := Apply(State{}, status("Running", "S1", t0))
+	a := Apply(State{}, hook("S1", "/w/DEV-1"))
+	a = Apply(a, status("Running", "S1", t0))
 	b := Apply(a, hook("S1", "/w/DEV-2"))
-	if got := a.Cards()[0].Title; got != "S1" {
+	if got := a.Cards()[0].Title; got != "DEV-1" {
 		t.Fatalf("input title mutated: %q", got)
 	}
 	if got := b.Cards()[0].Title; got != "DEV-2" {
