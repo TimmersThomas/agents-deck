@@ -50,9 +50,8 @@ func main() {
 	run(ctx, follow.Follow(ctx, o.events, 250*time.Millisecond), frames, cfg)
 }
 
-// run folds events into state and queues a frame on frames at most every
-// cfg.emitEvery when something changed, and every cfg.heartbeatEvery regardless.
-// frames holds only the newest frame, so a slow consumer never blocks run.
+// run queues a frame every cfg.emitEvery when something changed and every
+// cfg.heartbeatEvery regardless, replacing any unconsumed frame so it never blocks.
 func run(ctx context.Context, evs <-chan follow.Event, frames chan []byte, cfg config) {
 	var s state.State
 	dirty := true

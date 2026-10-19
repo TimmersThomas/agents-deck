@@ -52,9 +52,8 @@ type frame struct {
 	Cards []Card `json:"cards"`
 }
 
-// Render returns the state frame as a single newline-terminated JSON line. cards
-// must already be sorted by urgency: only the first MaxCards are sent, total
-// counts them all.
+// Render returns the frame as one JSON line. cards must be sorted by urgency: only
+// the first MaxCards are sent, total counts them all.
 func Render(cards []Card, now time.Time) ([]byte, error) {
 	b, err := json.Marshal(frame{V: Version, T: "state", NowMs: now.UnixMilli(), Total: len(cards), Cards: capped(cards)})
 	if err != nil {

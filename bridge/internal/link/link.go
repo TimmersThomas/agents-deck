@@ -1,8 +1,5 @@
-// Package link writes frames to the display over USB serial.
-//
-// At most one port is in flight: after a write times out the port is neither
-// closed nor reopened until that write returns, since on Darwin close(2) waits for
-// a write in progress and every reopen would leak an fd and pulse DTR/RTS.
+// Package link writes frames to the display over USB serial. A timed-out write keeps
+// its port until it returns: Darwin's close(2) waits for it, so reopening would leak.
 package link
 
 import (
@@ -30,9 +27,8 @@ func NewSender(open OpenFunc, retry time.Duration) *Sender {
 	return &Sender{open: open, retry: retry, writeTimeout: defaultWriteTimeout}
 }
 
-// Run keeps only the latest frame, writes it on every (re)connect and whenever a
-// newer one arrives. It returns when ctx is cancelled or frames is closed; a frame
-// still queued at that point may be dropped.
+// Run writes the latest frame on every (re)connect and whenever a newer one arrives.
+// It returns when ctx is cancelled or frames is closed, dropping any queued frame.
 func (s *Sender) Run(ctx context.Context, frames <-chan []byte) {
 	var latest []byte
 	for ctx.Err() == nil {
