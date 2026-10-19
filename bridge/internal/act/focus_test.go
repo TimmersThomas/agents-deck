@@ -48,7 +48,8 @@ func TestFocusSelectsWorkspaceThenFirstPanel(t *testing.T) {
 }
 
 func TestFocusRejectsInvalidWorkspaceBeforeRunning(t *testing.T) {
-	for _, ws := range []string{"", "x", wsA + "; rm -rf /", "--help", strings.Repeat("A", 37)} {
+	for _, ws := range []string{"", "x", wsA + "; rm -rf /", "--help", strings.Repeat("A", 37),
+		strings.Repeat("-", 36), "-" + wsA[1:], "ZZZZZZZZ-0000-4000-8000-000000000001"} {
 		r := &recorder{treeOut: fixtureTree(t)}
 		if err := newFocuser(r).Focus(context.Background(), ws); err == nil {
 			t.Errorf("%q accepted", ws)

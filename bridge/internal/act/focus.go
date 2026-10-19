@@ -8,7 +8,7 @@ import (
 	"time"
 )
 
-var workspaceID = regexp.MustCompile(`^[0-9A-Fa-f-]{36}$`)
+var workspaceID = regexp.MustCompile(`^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$`)
 
 // Runner runs one external command and returns its stdout.
 type Runner func(ctx context.Context, name string, args ...string) ([]byte, error)
