@@ -159,3 +159,28 @@ func TestHookOnExistingCardKeepsStatusAndSince(t *testing.T) {
 		t.Fatalf("since %d want %d", c.SinceMs, t0.UnixMilli())
 	}
 }
+
+func hookAt(name, surface, cwd string, at time.Time) events.Event {
+	return events.Event{Name: "agent.hook." + name, Hook: name, SurfaceID: surface, WorkspaceID: "W1", Cwd: cwd, At: at}
+}
+
+func TestTitleOnlyFromSessionStartAndPromptHooks(t *testing.T) {
+	const root = "/Users/u/projects/app/worktrees/DEV-7-title"
+	s := Apply(State{}, hookAt("SessionStart", "S1", root, t0))
+	s = Apply(s, status("Running", "S1", t0))
+	for i, h := range []struct{ name, cwd string }{
+		{"PreToolUse", root + "/src"},
+		{"Stop", root + "/.build"},
+		{"Notification", root + "/e2e"},
+		{"SubagentStop", root + "/src/pkg"},
+	} {
+		s = Apply(s, hookAt(h.name, "S1", h.cwd, t0.Add(time.Duration(i+1)*time.Second)))
+		if got := s.Cards()[0].Title; got != "DEV-7-title" {
+			t.Fatalf("after %s in %s title = %q, want DEV-7-title", h.name, h.cwd, got)
+		}
+	}
+	s = Apply(s, hookAt("UserPromptSubmit", "S1", "/Users/u/projects/app/worktrees/DEV-8-next", t0.Add(time.Minute)))
+	if got := s.Cards()[0].Title; got != "DEV-8-next" {
+		t.Fatalf("prompt hook title = %q, want DEV-8-next", got)
+	}
+}

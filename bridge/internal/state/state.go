@@ -28,6 +28,10 @@ var labelStatus = map[string]protocol.Status{
 	"Connection dropped": protocol.Error,
 }
 
+// titleHooks are the hooks whose cwd is the session root; later hooks report
+// subdirectories the agent moved into.
+var titleHooks = map[string]bool{"SessionStart": true, "UserPromptSubmit": true}
+
 func withTitle(s State, id, title string) State {
 	if s.titles[id] == title {
 		return s
@@ -53,7 +57,7 @@ func Apply(s State, e events.Event) State {
 	if e.SurfaceID == "" {
 		return s
 	}
-	if e.Hook != "" && e.Cwd != "" {
+	if titleHooks[e.Hook] && e.Cwd != "" {
 		s = withTitle(s, e.SurfaceID, filepath.Base(e.Cwd))
 	}
 	status, ok := labelStatus[e.Label]
