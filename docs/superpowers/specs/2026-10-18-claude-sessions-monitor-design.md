@@ -18,7 +18,7 @@ cmux (events.jsonl / socket) --> bridge (Go, Mac) --USB CDC serial, JSON lines--
 - Enrichment (context %, cost, tokens, last prompt): hook payloads redact `tool_input`/`context`, so read
   these from the Claude transcript (`transcriptPath` in `~/.cmuxterm/claude-hook-sessions.json`) or Claude's
   status line. Which one is decided during the first spike.
-- Card model: `{workspace_id, title (ticket key or slug), status: working|waiting|idle|done, since, context_pct?, cost?, last_prompt?}`.
+- Card model: `{id (cmux surface id), title (worktree name, max 48 runes), status: working|waiting|idle|error|done, since_ms, context_pct?, cost?, last_prompt?}`.
 - Emits full `state` frames only (coalesced to 250 ms); `patch` frames are deferred. Finds the board by USB VID/PID.
 - v2 actions: `interrupt` -> `cmux send-key --surface <id> escape`; `focus`; `approve`/`deny` -> `cmux send`.
 
