@@ -21,6 +21,7 @@ type config struct {
 	heartbeatEvery time.Duration
 	actions        <-chan protocol.Action // nil: actions disabled
 	focus          chan<- string          // workspace ids for focusWorker
+	logs           *actionLogs            // nil: run makes its own
 }
 
 var defaults = config{maxAge: 12 * time.Hour, emitEvery: 250 * time.Millisecond, heartbeatEvery: 30 * time.Second}
@@ -64,6 +65,9 @@ func run(ctx context.Context, evs <-chan follow.Event, frames chan []byte, cfg c
 	lastSent := time.Time{}
 	tick := time.NewTicker(cfg.emitEvery)
 	defer tick.Stop()
+	if cfg.logs == nil {
+		cfg.logs = newActionLogs()
+	}
 	for {
 		select {
 		case <-ctx.Done():
@@ -76,7 +80,7 @@ func run(ctx context.Context, evs <-chan follow.Event, frames chan []byte, cfg c
 			s, changed = state.Apply(s, e)
 			dirty = dirty || changed
 		case a := <-cfg.actions:
-			handleAction(s, a, cfg.focus)
+			handleAction(s, a, cfg.focus, cfg.logs)
 		case now := <-tick.C:
 			pruned := state.Prune(s, now, cfg.maxAge)
 			dirty = dirty || pruned.Len() != s.Len()

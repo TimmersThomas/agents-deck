@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"io"
 	"log"
 	"os"
@@ -186,6 +187,50 @@ func TestWiredGarbageAndUnknownIDsFocusNothingAndAreNotLogged(t *testing.T) {
 	}
 }
 
+func TestWiredGarbageFloodIsRateLimited(t *testing.T) {
+	logs := captureLog(t)
+	h, w := startWired(t)
+	h.send(running(s1, w1))
+	const sentinel = "FLOOD-SENTINEL-4b2e"
+	for i := 0; i < 50; i++ {
+		w.port.feed(t, fmt.Sprintf("%s %d\n", sentinel, i))
+	}
+	w.port.feed(t, focusLine)
+	select {
+	case <-w.focus:
+	case <-time.After(bound):
+		t.Fatal("valid line after the flood was not handled")
+	}
+	out := logs.String()
+	if got := strings.Count(out, "parse action"); got != 5 {
+		t.Fatalf("%d parse-error logs for 50 garbage lines, want 5; log:\n%s", got, out)
+	}
+	if strings.Contains(out, sentinel) {
+		t.Fatalf("log repeats untrusted input:\n%s", out)
+	}
+}
+
+func TestUnfocusableCardLogsAreRateLimitedAndNameTheCause(t *testing.T) {
+	logs := captureLog(t)
+	var s state.State
+	s, _ = state.Apply(s, running(s1, ""))
+	jobs, al := make(chan string, 1), newActionLogs()
+	for i := 0; i < 50; i++ {
+		handleAction(s, actionFor("never-seen-SENTINEL"), jobs, al)
+		handleAction(s, actionFor(s1), jobs, al)
+	}
+	out := logs.String()
+	if got := strings.Count(out, "card unknown"); got != 5 {
+		t.Fatalf("%d 'card unknown' logs, want 5; log:\n%s", got, out)
+	}
+	if got := strings.Count(out, "card has no workspace"); got != 5 {
+		t.Fatalf("%d 'card has no workspace' logs, want 5; log:\n%s", got, out)
+	}
+	if strings.Contains(out, "SENTINEL") || strings.Contains(out, s1) || len(jobs) != 0 {
+		t.Fatalf("id leaked or focus queued (%d); log:\n%s", len(jobs), out)
+	}
+}
+
 func TestWiredQueueFullDropsAndKeepsReading(t *testing.T) {
 	logs := captureLog(t)
 	w := newWiring(t)
@@ -259,7 +304,7 @@ func TestMidFocusQueuesOneTapAndDropsTheRest(t *testing.T) {
 	tap := func(id string) {
 		t.Helper()
 		done := make(chan struct{})
-		go func() { defer close(done); handleAction(s, actionFor(id), jobs) }()
+		go func() { defer close(done); handleAction(s, actionFor(id), jobs, newActionLogs()) }()
 		select {
 		case <-done:
 		case <-time.After(bound):
