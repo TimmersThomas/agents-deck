@@ -59,7 +59,13 @@ func Apply(s State, e events.Event) (_ State, changed bool) {
 	before, had := s.card(e.SurfaceID)
 	next := apply(s, e)
 	after, has := next.card(e.SurfaceID)
-	return next, had != has || before != after
+	return next, had != has || rendered(before) != rendered(after)
+}
+
+// rendered drops what the display never sees.
+func rendered(c protocol.Card) protocol.Card {
+	c.WS = ""
+	return c
 }
 
 func apply(s State, e events.Event) State {
@@ -69,12 +75,27 @@ func apply(s State, e events.Event) State {
 	if titleHooks[e.Hook] && e.Cwd != "" {
 		s = withTitle(s, e.SurfaceID, filepath.Base(e.Cwd))
 	}
+	s = withWorkspace(s, e)
 	card, seen := s.cards[e.SurfaceID]
 	status, ok := nextStatus(card, seen, e)
 	if !ok || (seen && card.Status == status) {
 		return s
 	}
-	return withCard(s, protocol.Card{ID: e.SurfaceID, Status: status, SinceMs: e.At.UnixMilli()})
+	ws := card.WS
+	if e.WorkspaceID != "" {
+		ws = e.WorkspaceID
+	}
+	return withCard(s, protocol.Card{ID: e.SurfaceID, WS: ws, Status: status, SinceMs: e.At.UnixMilli()})
+}
+
+// withWorkspace follows a surface that moved to another workspace.
+func withWorkspace(s State, e events.Event) State {
+	card, ok := s.cards[e.SurfaceID]
+	if !ok || e.WorkspaceID == "" || card.WS == e.WorkspaceID {
+		return s
+	}
+	card.WS = e.WorkspaceID
+	return withCard(s, card)
 }
 
 // Prune drops cards whose last status change is older than maxAge.
@@ -113,6 +134,9 @@ func (s State) card(id string) (protocol.Card, bool) {
 
 // Len returns the number of cards.
 func (s State) Len() int { return len(s.cards) }
+
+// Lookup returns the card with id, including its workspace.
+func (s State) Lookup(id string) (protocol.Card, bool) { return s.card(id) }
 
 // Cards returns the cards sorted by urgency, then newest status change, then id.
 func (s State) Cards() []protocol.Card {
