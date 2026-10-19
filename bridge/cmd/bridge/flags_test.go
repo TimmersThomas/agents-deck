@@ -60,3 +60,14 @@ func TestSIGTERMCancelsContext(t *testing.T) {
 		t.Fatal("SIGTERM did not cancel the context")
 	}
 }
+
+func TestParseFlagsActionDefaultsAndOverrides(t *testing.T) {
+	o, err := parseFlags(nil, home)
+	if err != nil || !o.act || o.cmux != "cmux" {
+		t.Fatalf("defaults %+v err=%v", o, err)
+	}
+	o, err = parseFlags([]string{"--act=false", "--cmux=/opt/homebrew/bin/cmux"}, home)
+	if err != nil || o.act || o.cmux != "/opt/homebrew/bin/cmux" {
+		t.Fatalf("overrides %+v err=%v", o, err)
+	}
+}
