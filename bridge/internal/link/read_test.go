@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"testing/iotest"
 	"time"
 )
 
@@ -106,10 +107,19 @@ func TestSenderLogsOnceWhenTheReaderStops(t *testing.T) {
 }
 
 func TestReadLinesGivesPrivateCopies(t *testing.T) {
+	want := []string{"aaa", "bbb", "ccc", "ddd"}
 	var got [][]byte
-	readLines(strings.NewReader("aaa\nbbb\n"), func(b []byte) { got = append(got, b) })
-	if string(got[0]) != "aaa" || string(got[1]) != "bbb" {
-		t.Fatalf("slices were reused: %q %q", got[0], got[1])
+	r := iotest.OneByteReader(strings.NewReader(strings.Join(want, "\n") + "\n"))
+	if err := readLines(r, func(b []byte) { got = append(got, b) }); err != io.EOF {
+		t.Fatal(err)
+	}
+	if len(got) != len(want) {
+		t.Fatalf("got %d lines, want %d", len(got), len(want))
+	}
+	for i := range want {
+		if string(got[i]) != want[i] {
+			t.Errorf("line %d is %q after later reads, want %q: slices were reused", i, got[i], want[i])
+		}
 	}
 }
 
@@ -147,12 +157,12 @@ func TestSenderDeliversLinesAndStopsReadingOnClose(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	frames := make(chan []byte, 1)
+	t.Cleanup(cancel)
 	done := make(chan struct{})
 	go func() { defer close(done); s.Run(ctx, frames) }()
 
-	if _, err := feed.Write([]byte("{\"v\":1}\n")); err != nil {
-		t.Fatal(err)
-	}
+	wrote := make(chan error, 1)
+	go func() { _, err := feed.Write([]byte("{\"v\":1}\n")); wrote <- err }()
 	select {
 	case got := <-lines:
 		if got != `{"v":1}` {
@@ -160,6 +170,9 @@ func TestSenderDeliversLinesAndStopsReadingOnClose(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("line not delivered")
+	}
+	if err := <-wrote; err != nil {
+		t.Fatal(err)
 	}
 
 	cancel()
