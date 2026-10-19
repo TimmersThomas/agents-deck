@@ -1,0 +1,5 @@
+build/
+managed_components/
+sdkconfig
+sdkconfig.old
+components/cards_core/test/build/
