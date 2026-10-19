@@ -20,7 +20,12 @@ type Sender struct {
 	retry        time.Duration
 	writeTimeout time.Duration
 	lastOpenErr  string
+	onLine       func([]byte)
 }
+
+// OnLine registers fn for lines the display sends. Call it before Run; fn runs on
+// a reader goroutine per open port, so it must not block.
+func (s *Sender) OnLine(fn func(line []byte)) { s.onLine = fn }
 
 // NewSender returns a Sender that reopens the port via open, waiting retry between attempts.
 func NewSender(open OpenFunc, retry time.Duration) *Sender {
@@ -50,6 +55,7 @@ func (s *Sender) connect(ctx context.Context, frames <-chan []byte, latest []byt
 		return latest, false
 	}
 	s.opened()
+	s.startReader(port)
 	latest, stop, pending := s.serve(ctx, port, frames, latest)
 	if stop {
 		s.shutdown(port, pending == nil)
@@ -66,6 +72,13 @@ func (s *Sender) connect(ctx context.Context, frames <-chan []byte, latest []byt
 	}
 	latest, stop, _ = await(ctx, frames, latest, closeAsync(port))
 	return latest, stop
+}
+
+// startReader reads lines from port until it is closed; ports that cannot be read are ignored.
+func (s *Sender) startReader(port io.Writer) {
+	if r, ok := port.(io.Reader); ok && s.onLine != nil {
+		go readLines(r, s.onLine)
+	}
 }
 
 func (s *Sender) openFailed(err error) {
