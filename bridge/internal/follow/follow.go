@@ -15,17 +15,24 @@ import (
 
 type Event = events.Event
 
+const (
+	snippetLen    = 80
+	firstSkipLogs = 5
+	skipLogEvery  = 1000
+)
+
 // Follow replays path, then emits appended events until ctx is cancelled.
+// It keeps the file open between polls so a rotated file's tail is still read.
 func Follow(ctx context.Context, path string, poll time.Duration) <-chan Event {
 	out := make(chan Event, 64)
+	w := &follower{path: path}
 	go func() {
 		defer close(out)
-		var offset int64
-		var partial []byte
+		defer w.close()
 		ticker := time.NewTicker(poll)
 		defer ticker.Stop()
 		for {
-			offset, partial = drain(ctx, path, offset, partial, out)
+			w.poll(ctx, out)
 			select {
 			case <-ctx.Done():
 				return
@@ -36,42 +43,135 @@ func Follow(ctx context.Context, path string, poll time.Duration) <-chan Event {
 	return out
 }
 
-func drain(ctx context.Context, path string, offset int64, partial []byte, out chan<- Event) (int64, []byte) {
-	f, err := os.Open(path)
-	if err != nil {
-		if !os.IsNotExist(err) {
-			log.Printf("follow: open %s: %v", path, err)
-		}
-		return offset, partial
+type follower struct {
+	path    string
+	file    *os.File
+	info    os.FileInfo
+	reader  *bufio.Reader
+	offset  int64
+	partial []byte
+	skipped int
+	missing int // 0 found, 1 first miss (silent), 2 "waiting" logged
+	lastErr string
+}
+
+func (w *follower) poll(ctx context.Context, out chan<- Event) {
+	if w.file == nil && !w.reopen() {
+		return
 	}
-	defer f.Close()
+	if !w.drain(ctx, out) {
+		return
+	}
+	if w.rotated() && w.drain(ctx, out) {
+		w.reopen()
+	}
+}
+
+// reopen replaces the current handle with a fresh one on path, starting at offset 0.
+func (w *follower) reopen() bool {
+	w.close()
+	f, err := os.Open(w.path)
+	if err != nil {
+		w.openFailed(err)
+		return false
+	}
 	info, err := f.Stat()
 	if err != nil {
-		log.Printf("follow: stat %s: %v", path, err)
-		return offset, partial
+		f.Close()
+		w.logErr("stat", err)
+		return false
 	}
-	if info.Size() < offset {
-		offset, partial = 0, nil
+	if w.missing == 2 {
+		log.Printf("follow: %s appeared", w.path)
 	}
-	if _, err := f.Seek(offset, io.SeekStart); err != nil {
-		log.Printf("follow: seek %s: %v", path, err)
-		return offset, partial
+	w.missing, w.lastErr = 0, ""
+	w.file, w.info = f, info
+	w.reader = bufio.NewReader(f)
+	w.offset, w.partial = 0, nil
+	return true
+}
+
+func (w *follower) close() {
+	if w.file != nil {
+		w.file.Close()
+		w.file, w.info = nil, nil
 	}
-	r := bufio.NewReader(f)
+}
+
+func (w *follower) openFailed(err error) {
+	if !os.IsNotExist(err) {
+		w.logErr("open", err)
+		return
+	}
+	switch w.missing {
+	case 0:
+		w.missing = 1
+	case 1:
+		w.missing = 2
+		log.Printf("follow: waiting for %s", w.path)
+	}
+}
+
+func (w *follower) logErr(op string, err error) {
+	if msg := err.Error(); msg != w.lastErr {
+		w.lastErr = msg
+		log.Printf("follow: %s %s: %v", op, w.path, err)
+	}
+}
+
+// rotated reports whether path now refers to a different file or the same file shrank.
+func (w *follower) rotated() bool {
+	pathInfo, err := os.Stat(w.path)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			w.logErr("stat", err)
+		}
+		return false
+	}
+	return !os.SameFile(w.info, pathInfo) || pathInfo.Size() < w.offset
+}
+
+// drain reads to EOF, emitting complete lines. It returns false if ctx ended.
+func (w *follower) drain(ctx context.Context, out chan<- Event) bool {
 	for {
-		chunk, err := r.ReadBytes('\n')
-		offset += int64(len(chunk))
-		partial = append(partial, chunk...)
+		chunk, err := w.reader.ReadBytes('\n')
+		w.offset += int64(len(chunk))
+		w.partial = append(w.partial, chunk...)
 		if err != nil {
-			return offset, partial
-		}
-		if e, perr := events.ParseLine(bytes.TrimSpace(partial)); perr == nil {
-			select {
-			case out <- e:
-			case <-ctx.Done():
-				return offset, nil
+			if err != io.EOF {
+				w.logErr("read", err)
 			}
+			return true
 		}
-		partial = nil
+		if !w.emit(ctx, out) {
+			return false
+		}
+	}
+}
+
+func (w *follower) emit(ctx context.Context, out chan<- Event) bool {
+	start := w.offset - int64(len(w.partial))
+	line := bytes.TrimSpace(w.partial)
+	w.partial = nil
+	if len(line) == 0 {
+		return true
+	}
+	e, err := events.ParseLine(line)
+	if err != nil {
+		w.skip(start, line)
+		return true
+	}
+	select {
+	case out <- e:
+		return true
+	case <-ctx.Done():
+		return false
+	}
+}
+
+func (w *follower) skip(offset int64, line []byte) {
+	w.skipped++
+	if w.skipped <= firstSkipLogs || w.skipped%skipLogEvery == 0 {
+		log.Printf("follow: skipping unparseable line #%d at offset %d: %.*q", w.skipped, offset, snippetLen, line)
 	}
 }
