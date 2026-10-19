@@ -108,3 +108,7 @@ func TestRunStillStopsWithActionsWired(t *testing.T) {
 	h, _, _ := actionHarness(t)
 	h.stop()
 }
+
+func actionFor(id string) protocol.Action {
+	return protocol.Action{Name: protocol.ActionFocus, ID: id}
+}
