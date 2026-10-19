@@ -16,7 +16,6 @@ import (
 type Event = events.Event
 
 const (
-	snippetLen    = 80
 	firstSkipLogs = 5
 	skipLogEvery  = 1000
 )
@@ -173,9 +172,10 @@ func (w *follower) emit(ctx context.Context, out chan<- Event) bool {
 	}
 }
 
+// skip never logs the line itself: it may hold prompt text.
 func (w *follower) skip(offset int64, line []byte) {
 	w.skipped++
 	if w.skipped <= firstSkipLogs || w.skipped%skipLogEvery == 0 {
-		log.Printf("follow: skipping unparseable line #%d at offset %d: %.*q", w.skipped, offset, snippetLen, line)
+		log.Printf("follow: skipping unparseable line #%d at offset %d (%d bytes)", w.skipped, offset, len(line))
 	}
 }

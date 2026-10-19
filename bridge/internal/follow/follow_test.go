@@ -211,10 +211,10 @@ func TestMissingFileAppearsLater(t *testing.T) {
 	}
 }
 
-func TestGarbageLineIsLoggedWithOffset(t *testing.T) {
+func TestGarbageLineIsLoggedWithOffsetAndLengthOnly(t *testing.T) {
 	sb := captureLog(t)
 	path := filepath.Join(t.TempDir(), "events.jsonl")
-	long := strings.Repeat("x", 200)
+	long := "secret-prompt " + strings.Repeat("x", 200)
 	appendTo(t, path, "garbage\n"+long+"\n"+line("7"))
 	ch, _ := startFollow(t, path)
 
@@ -222,14 +222,14 @@ func TestGarbageLineIsLoggedWithOffset(t *testing.T) {
 		t.Fatalf("valid line after garbage got %d", got)
 	}
 	out := sb.String()
-	if !strings.Contains(out, "offset 0") || !strings.Contains(out, "garbage") {
-		t.Fatalf("missing offset-bearing skip message:\n%s", out)
+	if !strings.Contains(out, "offset 0 (7 bytes)") {
+		t.Fatalf("first skip should report offset 0 and length 7:\n%s", out)
 	}
-	if !strings.Contains(out, "offset 8") {
-		t.Fatalf("second skip should report offset 8:\n%s", out)
+	if !strings.Contains(out, fmt.Sprintf("offset 8 (%d bytes)", len(long))) {
+		t.Fatalf("second skip should report offset 8 and length %d:\n%s", len(long), out)
 	}
-	if !strings.Contains(out, strings.Repeat("x", 80)) || strings.Contains(out, strings.Repeat("x", 81)) {
-		t.Fatalf("line snippet not capped at 80 chars:\n%s", out)
+	if strings.Contains(out, "garbage") || strings.Contains(out, "secret") || strings.Contains(out, "xxx") {
+		t.Fatalf("skip log leaked line content:\n%s", out)
 	}
 }
 
