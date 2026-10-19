@@ -3,124 +3,158 @@ package link
 
 import (
 	"context"
-	"fmt"
+	"errors"
 	"io"
 	"log"
-	"strings"
 	"time"
-
-	"go.bug.st/serial"
-	"go.bug.st/serial/enumerator"
 )
 
+const defaultWriteTimeout = 2 * time.Second
+
+var errWriteTimeout = errors.New("write timed out")
+
+// OpenFunc opens the display port. It is called again after every failure.
 type OpenFunc func() (io.WriteCloser, error)
 
+// Sender writes the latest frame to a port that may disappear and come back.
 type Sender struct {
-	open  OpenFunc
-	retry time.Duration
+	open         OpenFunc
+	retry        time.Duration
+	writeTimeout time.Duration
 }
 
+// NewSender returns a Sender that reopens the port via open, waiting retry between attempts.
 func NewSender(open OpenFunc, retry time.Duration) *Sender {
-	return &Sender{open: open, retry: retry}
+	return &Sender{open: open, retry: retry, writeTimeout: defaultWriteTimeout}
 }
 
-// Run writes the latest frame whenever one arrives and after every reconnect.
+// Run keeps only the latest frame, writes it on every (re)connect and whenever a
+// newer one arrives. It returns when ctx is cancelled or frames is closed.
 func (s *Sender) Run(ctx context.Context, frames <-chan []byte) {
 	var latest []byte
-	var port io.WriteCloser
-	defer func() {
-		if port != nil {
-			port.Close()
-		}
-	}()
-	for {
-		if port == nil {
-			p, err := s.open()
-			if err != nil {
-				log.Printf("link: open: %v", err)
-				if !sleep(ctx, s.retry) {
-					return
-				}
-				latest = drainLatest(frames, latest)
-				continue
+	for ctx.Err() == nil {
+		port, err := s.open()
+		if err != nil {
+			log.Printf("link: open: %v", err)
+		} else {
+			var done bool
+			if latest, done = s.serve(ctx, port, frames, latest); done {
+				return
 			}
-			port = p
-			if latest != nil && !s.write(&port, latest) {
-				continue
+		}
+		var more bool
+		if latest, more = s.waitRetry(ctx, frames, latest); !more {
+			return
+		}
+	}
+}
+
+// serve writes frames to port until a write fails (done=false) or Run must stop (done=true).
+func (s *Sender) serve(ctx context.Context, port io.WriteCloser, frames <-chan []byte, latest []byte) (_ []byte, done bool) {
+	abandoned := false
+	defer func() { s.closePort(port, !abandoned) }()
+	latest, open := drainLatest(frames, latest)
+	if !open {
+		return latest, true
+	}
+	for {
+		if latest != nil {
+			if err := s.writeFrame(ctx, port, latest); err != nil {
+				log.Printf("link: write: %v", err)
+				abandoned = true
+				return latest, ctx.Err() != nil
 			}
 		}
 		select {
 		case <-ctx.Done():
-			return
+			return latest, true
 		case f, ok := <-frames:
 			if !ok {
-				return
+				return latest, true
 			}
-			latest = f
-			s.write(&port, latest)
+			if latest, open = drainLatest(frames, f); !open {
+				return latest, true
+			}
 		}
 	}
 }
 
-func (s *Sender) write(port *io.WriteCloser, frame []byte) bool {
-	if _, err := (*port).Write(frame); err != nil {
-		log.Printf("link: write: %v", err)
-		(*port).Close()
-		*port = nil
-		return false
+// writeFrame writes in a goroutine so a stalled port cannot block Run. After a
+// timeout or cancel the goroutine is abandoned; it exits once Close unblocks Write.
+func (s *Sender) writeFrame(ctx context.Context, port io.Writer, frame []byte) error {
+	res := make(chan error, 1)
+	go func() {
+		n, err := port.Write(frame)
+		if err == nil && n != len(frame) {
+			err = io.ErrShortWrite
+		}
+		res <- err
+	}()
+	t := time.NewTimer(s.writeTimeout)
+	defer t.Stop()
+	select {
+	case err := <-res:
+		return err
+	case <-t.C:
+		return errWriteTimeout
+	case <-ctx.Done():
+		return ctx.Err()
 	}
-	return true
 }
 
-func drainLatest(frames <-chan []byte, latest []byte) []byte {
+// closePort closes in a goroutine since Close may block; wait bounds how long to wait for it.
+func (s *Sender) closePort(port io.Closer, wait bool) {
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		if err := port.Close(); err != nil {
+			log.Printf("link: close: %v", err)
+		}
+	}()
+	if !wait {
+		return
+	}
+	select {
+	case <-done:
+	case <-time.After(s.writeTimeout):
+		log.Printf("link: close did not finish within %v", s.writeTimeout)
+	}
+}
+
+// waitRetry waits retry while still consuming frames; more is false when Run must stop.
+func (s *Sender) waitRetry(ctx context.Context, frames <-chan []byte, latest []byte) (_ []byte, more bool) {
+	t := time.NewTimer(s.retry)
+	defer t.Stop()
 	for {
 		select {
-		case f := <-frames:
-			latest = f
-		default:
-			return latest
-		}
-	}
-}
-
-func sleep(ctx context.Context, d time.Duration) bool {
-	select {
-	case <-ctx.Done():
-		return false
-	case <-time.After(d):
-		return true
-	}
-}
-
-// openQuiet opens the port with DTR and RTS low so the ESP32 is not reset on connect.
-func openQuiet(name string, baud int) (io.WriteCloser, error) {
-	p, err := serial.Open(name, &serial.Mode{BaudRate: baud})
-	if err != nil {
-		return nil, fmt.Errorf("open %s: %w", name, err)
-	}
-	if err := p.SetDTR(false); err != nil {
-		p.Close()
-		return nil, fmt.Errorf("clear DTR: %w", err)
-	}
-	if err := p.SetRTS(false); err != nil {
-		p.Close()
-		return nil, fmt.Errorf("clear RTS: %w", err)
-	}
-	return p, nil
-}
-
-// SerialOpener finds the port by USB VID/PID on every call, so it survives resets.
-func SerialOpener(vid, pid string, baud int) OpenFunc {
-	return func() (io.WriteCloser, error) {
-		ports, err := enumerator.GetDetailedPortsList()
-		if err != nil {
-			return nil, fmt.Errorf("list ports: %w", err)
-		}
-		for _, p := range ports {
-			if p.IsUSB && strings.EqualFold(p.VID, vid) && strings.EqualFold(p.PID, pid) {
-				return openQuiet(p.Name, baud)
+		case <-ctx.Done():
+			return latest, false
+		case <-t.C:
+			return latest, true
+		case f, ok := <-frames:
+			if !ok {
+				return latest, false
+			}
+			var open bool
+			if latest, open = drainLatest(frames, f); !open {
+				return latest, false
 			}
 		}
-		return nil, fmt.Errorf("no USB device %s:%s", vid, pid)
+	}
+}
+
+// drainLatest returns the newest queued frame, or latest if none is queued.
+// open is false once frames is closed; a closed channel never overwrites latest.
+func drainLatest(frames <-chan []byte, latest []byte) (_ []byte, open bool) {
+	for {
+		select {
+		case f, ok := <-frames:
+			if !ok {
+				return latest, false
+			}
+			latest = f
+		default:
+			return latest, true
+		}
 	}
 }
