@@ -16,10 +16,13 @@ import (
 	"desktop-controller/bridge/internal/state"
 )
 
-const (
-	emitEvery      = 250 * time.Millisecond
-	heartbeatEvery = 30 * time.Second
-)
+type config struct {
+	maxAge         time.Duration
+	emitEvery      time.Duration
+	heartbeatEvery time.Duration
+}
+
+var defaults = config{maxAge: 12 * time.Hour, emitEvery: 250 * time.Millisecond, heartbeatEvery: 30 * time.Second}
 
 type nopCloser struct{ io.Writer }
 
@@ -35,7 +38,7 @@ func main() {
 	pid := flag.String("pid", "1001", "USB product id")
 	baud := flag.Int("baud", 115200, "serial baud rate")
 	toStdout := flag.Bool("stdout", false, "print frames instead of using serial")
-	maxAge := flag.Duration("max-age", 12*time.Hour, "drop cards with no status change for this long")
+	maxAge := flag.Duration("max-age", defaults.maxAge, "drop cards with no status change for this long")
 	flag.Parse()
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
@@ -48,14 +51,17 @@ func main() {
 	frames := make(chan []byte, 1)
 	go link.NewSender(open, time.Second).Run(ctx, frames)
 
-	run(ctx, follow.Follow(ctx, *eventsPath, 250*time.Millisecond), frames, *maxAge)
+	run(ctx, follow.Follow(ctx, *eventsPath, 250*time.Millisecond), frames, config{maxAge: *maxAge, emitEvery: defaults.emitEvery, heartbeatEvery: defaults.heartbeatEvery})
 }
 
-func run(ctx context.Context, evs <-chan follow.Event, frames chan []byte, maxAge time.Duration) {
+// run folds events into state and queues a frame on frames at most every
+// cfg.emitEvery when something changed, and every cfg.heartbeatEvery regardless.
+// frames holds only the newest frame, so a slow consumer never blocks run.
+func run(ctx context.Context, evs <-chan follow.Event, frames chan []byte, cfg config) {
 	var s state.State
 	dirty := true
 	lastSent := time.Time{}
-	tick := time.NewTicker(emitEvery)
+	tick := time.NewTicker(cfg.emitEvery)
 	defer tick.Stop()
 	for {
 		select {
@@ -69,23 +75,29 @@ func run(ctx context.Context, evs <-chan follow.Event, frames chan []byte, maxAg
 			s, changed = state.Apply(s, e)
 			dirty = dirty || changed
 		case now := <-tick.C:
-			pruned := state.Prune(s, now, maxAge)
+			pruned := state.Prune(s, now, cfg.maxAge)
 			dirty = dirty || pruned.Len() != s.Len()
 			s = pruned
-			if !dirty && now.Sub(lastSent) < heartbeatEvery {
-				continue
+			if dirty || now.Sub(lastSent) >= cfg.heartbeatEvery {
+				if send(frames, s, now) {
+					dirty, lastSent = false, now
+				}
 			}
-			b, err := protocol.Render(s.Cards(), now)
-			if err != nil {
-				log.Printf("render: %v", err)
-				continue
-			}
-			select {
-			case <-frames:
-			default:
-			}
-			frames <- b
-			dirty, lastSent = false, now
 		}
 	}
+}
+
+// send replaces any unconsumed frame with the current state.
+func send(frames chan []byte, s state.State, now time.Time) bool {
+	b, err := protocol.Render(s.Cards(), now)
+	if err != nil {
+		log.Printf("render: %v", err)
+		return false
+	}
+	select {
+	case <-frames:
+	default:
+	}
+	frames <- b
+	return true
 }
