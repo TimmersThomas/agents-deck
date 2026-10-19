@@ -60,11 +60,9 @@ func Apply(s State, e events.Event) State {
 	if titleHooks[e.Hook] && e.Cwd != "" {
 		s = withTitle(s, e.SurfaceID, filepath.Base(e.Cwd))
 	}
-	status, ok := labelStatus[e.Label]
-	if !ok {
-		return s
-	}
-	if card, seen := s.cards[e.SurfaceID]; seen && card.Status == status {
+	card, seen := s.cards[e.SurfaceID]
+	status, ok := nextStatus(card, seen, e)
+	if !ok || (seen && card.Status == status) {
 		return s
 	}
 	return withCard(s, protocol.Card{ID: e.SurfaceID, Status: status, SinceMs: e.At.UnixMilli()})
@@ -82,7 +80,9 @@ func Prune(s State, now time.Time, maxAge time.Duration) State {
 	return State{cards: cards, titles: s.titles}
 }
 
-var rank = map[protocol.Status]int{protocol.Waiting: 0, protocol.Error: 1, protocol.Working: 2, protocol.Idle: 3}
+var rank = map[protocol.Status]int{
+	protocol.Waiting: 0, protocol.Error: 1, protocol.Working: 2, protocol.Idle: 3, protocol.Done: 4,
+}
 
 func (s State) title(id string) string {
 	if t, ok := s.titles[id]; ok {

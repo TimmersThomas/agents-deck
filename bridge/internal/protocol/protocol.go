@@ -15,6 +15,7 @@ const (
 	Waiting Status = "waiting"
 	Idle    Status = "idle"
 	Error   Status = "error"
+	Done    Status = "done"
 )
 
 type Card struct {
