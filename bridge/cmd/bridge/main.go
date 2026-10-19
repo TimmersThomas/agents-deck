@@ -2,12 +2,11 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"io"
 	"log"
 	"os"
-	"os/signal"
-	"path/filepath"
 	"time"
 
 	"desktop-controller/bridge/internal/follow"
@@ -29,29 +28,26 @@ type nopCloser struct{ io.Writer }
 func (nopCloser) Close() error { return nil }
 
 func main() {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		log.Fatal(err)
+	o, err := parseFlags(os.Args[1:], os.UserHomeDir)
+	if errors.Is(err, flag.ErrHelp) {
+		return
 	}
-	eventsPath := flag.String("events", filepath.Join(home, ".cmuxterm", "events.jsonl"), "cmux events file")
-	vid := flag.String("vid", "303A", "USB vendor id")
-	pid := flag.String("pid", "1001", "USB product id")
-	baud := flag.Int("baud", 115200, "serial baud rate")
-	toStdout := flag.Bool("stdout", false, "print frames instead of using serial")
-	maxAge := flag.Duration("max-age", defaults.maxAge, "drop cards with no status change for this long")
-	flag.Parse()
-
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	if err != nil {
+		log.Fatalf("bridge: %v", err)
+	}
+	ctx, stop := signalContext(context.Background())
 	defer stop()
 
-	open := link.SerialOpener(*vid, *pid, *baud)
-	if *toStdout {
+	open := link.SerialOpener(o.vid, o.pid, o.baud)
+	if o.stdout {
 		open = func() (io.WriteCloser, error) { return nopCloser{os.Stdout}, nil }
 	}
 	frames := make(chan []byte, 1)
 	go link.NewSender(open, time.Second).Run(ctx, frames)
 
-	run(ctx, follow.Follow(ctx, *eventsPath, 250*time.Millisecond), frames, config{maxAge: *maxAge, emitEvery: defaults.emitEvery, heartbeatEvery: defaults.heartbeatEvery})
+	cfg := defaults
+	cfg.maxAge = o.maxAge
+	run(ctx, follow.Follow(ctx, o.events, 250*time.Millisecond), frames, cfg)
 }
 
 // run folds events into state and queues a frame on frames at most every
