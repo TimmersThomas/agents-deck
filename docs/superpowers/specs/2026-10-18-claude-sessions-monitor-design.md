@@ -22,12 +22,12 @@ cmux (events.jsonl / socket) --> bridge (Go, Mac) --USB CDC serial, JSON lines--
 - Emits full `state` frames only (coalesced to 250 ms); `patch` frames are deferred. Finds the board by USB VID/PID.
 - v2 actions: `interrupt` -> `cmux send-key --surface <id> escape`; `focus`; `approve`/`deny` -> `cmux send`.
 
-### firmware (ESP-IDF 5.5.x, LVGL 9.3)
-- Start from Waveshare examples `10_LVGL_V9_Test` (display + touch bring-up) and rotate 90 degrees to 640x172.
-- Native USB CDC for the protocol; Type-C is also the power source.
-- UI: horizontal swipeable strip of session cards (waiting first); tap opens a detail page
-  (status, context bar, cost, last prompt). Screen dims when no sessions are active.
-- Fallbacks: "no bridge" screen when frames stop for N seconds.
+### firmware (ESP-IDF 5.5.3, LVGL 9.6)
+- Source: `firmware/`, started from Waveshare's `10_LVGL_V9_Test` (display, touch and LVGL port kept as is, landscape via software rotation 90).
+- Pure C library `cards_core` (frame parser on jsmn, line assembler, age formatting, action formatting) with host tests; the ESP-IDF side is glue: `board` (display/touch/LVGL), `serial_link` (USB-Serial-JTAG driver, rx task, tx for actions), `ui` (cards), `main`.
+- UI (640x172 landscape): a horizontally swipeable row of cards, 3 visible (200x156 each, snap per card). Card = status-coloured left bar, title (3 lines, ellipsis), status text, age (`now_ms - since_ms` plus local time since the frame arrived; never the device clock). Waiting and error cards come first (bridge sorts), done cards are dimmed. Overlay "no bridge" after 35 s without a frame (heartbeat is 30 s), "no sessions" for an empty frame, `+N` when `total` exceeds the cards sent, a tiny `rx frames/rejected` counter.
+- Tap on a card sends `{"v":1,"t":"action","a":"focus","id":"<card id>"}` over the same port; the bridge focuses the workspace's first pane in cmux.
+- Console stays on UART with the USB port as secondary output; the app installs the USB-Serial-JTAG driver itself and ignores any line that is not a JSON state frame (ESP log lines reach the host too; the bridge rate-limits them).
 
 ### protocol
 Versioned JSON lines (`{"v":1,"t":"state|action",...}`), schema shared by Go and firmware.
