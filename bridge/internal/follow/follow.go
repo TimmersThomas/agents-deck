@@ -56,6 +56,9 @@ type follower struct {
 }
 
 func (w *follower) poll(ctx context.Context, out chan<- Event) {
+	if ctx.Err() != nil {
+		return
+	}
 	if w.file == nil && !w.reopen() {
 		return
 	}
@@ -98,6 +101,7 @@ func (w *follower) close() {
 	}
 }
 
+// openFailed stays silent on the first not-exist miss: a one-poll debounce before logging "waiting".
 func (w *follower) openFailed(err error) {
 	if !os.IsNotExist(err) {
 		w.logErr("open", err)

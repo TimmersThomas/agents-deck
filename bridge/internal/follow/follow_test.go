@@ -142,19 +142,31 @@ func TestCancelClosesChannelWhileSendBlocked(t *testing.T) {
 	appendTo(t, path, sb.String())
 	ch, cancel := startFollow(t, path)
 
-	time.Sleep(5 * testPoll)
-	cancel()
-
-	done := make(chan struct{})
-	go func() {
-		for range ch {
+	fillDeadline := time.Now().Add(2 * time.Second)
+	for len(ch) < cap(ch) {
+		if time.Now().After(fillDeadline) {
+			t.Fatalf("channel never filled: len %d, cap %d", len(ch), cap(ch))
 		}
-		close(done)
-	}()
-	select {
-	case <-done:
-	case <-time.After(2 * time.Second):
-		t.Fatal("channel not closed after cancel")
+		time.Sleep(time.Millisecond)
+	}
+	cancel()
+	time.Sleep(100 * time.Millisecond)
+
+	got := 0
+	timeout := time.After(2 * time.Second)
+	for {
+		select {
+		case _, ok := <-ch:
+			if !ok {
+				if got > cap(ch) {
+					t.Fatalf("received %d events after cancel, want <= %d", got, cap(ch))
+				}
+				return
+			}
+			got++
+		case <-timeout:
+			t.Fatalf("channel not closed after cancel; received %d events", got)
+		}
 	}
 }
 
