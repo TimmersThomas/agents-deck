@@ -13,7 +13,7 @@
 - Action frame from the display, one JSON line: `{"v":1,"t":"action","a":"focus","id":"<card id>"}`. Only `focus` exists; the id is the card id (the cmux surface id) from the last state frame, at most `protocol.MaxIDBytes` bytes.
 - The display never sends a workspace id or a command: the bridge looks the card up in its own state and ignores unknown ids.
 - Focus = `cmux select-workspace --workspace <ws>` then `cmux focus-panel --panel <surface ref> --workspace <ws>`, where `<surface ref>` is the `selected_surface_ref` of the workspace's FIRST pane in layout order (depth-first first leaf of `layout`; fall back to `panes[0]`). The workspace is found by `id` in `cmux tree --json --all`.
-- Only fixed cmux sub-commands are run, and every argument is validated first: workspace id matches `^[0-9A-Fa-f-]{36}$`, surface ref matches `^surface:[0-9]+$`. Logs never contain raw serial input.
+- Only fixed cmux sub-commands are run, and every argument is validated first: workspace id is a strict UUID (`^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$`), surface ref matches `^surface:[0-9]+$`. Logs never contain raw serial input.
 - The cmux socket is only reachable from processes started inside cmux: the bridge must be launched from a cmux terminal for focus to work. `--act=false` disables actions; `--stdout` implies no actions.
 - Frames must not change on the wire: the workspace id is internal (`json:"-"`) and a workspace-only change must not trigger a frame.
 - One focus at a time: while a focus runs one further tap is queued and later taps are dropped and logged.
@@ -1317,4 +1317,5 @@ git add bridge && git commit -m "feat(bridge): focus a workspace when the displa
 - **Spec coverage:** tap-to-focus = Tasks 1-5 (action frame, workspace tracking, first-pane rule from the real tree, serial read side, wiring). The display side (sending the action) belongs to the firmware plan.
 - **Deferred:** `--act` needs a cmux terminal (socket access); hardware round trip (board sends a tap, cmux switches) is verified in the firmware plan.
 - **Type consistency:** `Card.WS`, `Action{Name,ID}`, `ParseAction`, `State.Lookup`, `FirstPanel`, `Focuser.Focus(ctx, ws) error`, `Sender.OnLine(func([]byte))`, `config.actions/focus`, `focusWorker`, `handleAction` are used with the same signatures everywhere.
+- **Executed deviations (final review):** action and unknown-card logs are rate limited (first 5, then every 1000th); the serial reader logs when it stops; `ExecRunner` sets `WaitDelay` and reports deadlines; the workspace id must be a strict UUID.
 - **Placeholders:** none.
