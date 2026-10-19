@@ -4,36 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os/exec"
 	"regexp"
-	"strings"
 	"time"
 )
 
 var workspaceID = regexp.MustCompile(`^[0-9A-Fa-f-]{36}$`)
 
-const maxStderr = 200
-
 // Runner runs one external command and returns its stdout.
 type Runner func(ctx context.Context, name string, args ...string) ([]byte, error)
-
-// ExecRunner runs the command for real, wrapping failures with the sub-command and a
-// short stderr excerpt.
-func ExecRunner(ctx context.Context, name string, args ...string) ([]byte, error) {
-	out, err := exec.CommandContext(ctx, name, args...).Output()
-	if err == nil {
-		return out, nil
-	}
-	var ee *exec.ExitError
-	if errors.As(err, &ee) {
-		msg := strings.TrimSpace(string(ee.Stderr))
-		if len(msg) > maxStderr {
-			msg = msg[:maxStderr]
-		}
-		return out, fmt.Errorf("%s %s: %w: %s", name, args[0], err, msg)
-	}
-	return out, fmt.Errorf("%s %s: %w", name, args[0], err)
-}
 
 // Focuser brings a cmux workspace to the front and focuses its first pane.
 type Focuser struct {
