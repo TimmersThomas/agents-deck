@@ -1,0 +1,74 @@
+{
+  "windows": [
+    {
+      "ref": "window:1",
+      "workspaces": [
+        {
+          "id": "AAAAAAAA-0000-4000-8000-000000000001",
+          "title": "DEV-1-alpha",
+          "layout": {
+            "direction": "horizontal",
+            "split": 0.66,
+            "children": [
+              {"pane": {"ref": "pane:1001"}},
+              {
+                "direction": "vertical",
+                "split": 0.75,
+                "children": [{"pane": {"ref": "pane:1002"}}, {"pane": {"ref": "pane:1003"}}]
+              }
+            ]
+          },
+          "panes": [
+            {"id": null, "ref": "pane:1001", "index": 0, "selected_surface_ref": "surface:2001", "surfaces": [{"ref": "surface:2001"}]},
+            {"id": null, "ref": "pane:1002", "index": 1, "selected_surface_ref": "surface:2002", "surfaces": [{"ref": "surface:2002"}]},
+            {"id": null, "ref": "pane:1003", "index": 2, "selected_surface_ref": "surface:2003", "surfaces": [{"ref": "surface:2003"}]}
+          ]
+        },
+        {
+          "id": "BBBBBBBB-0000-4000-8000-000000000002",
+          "title": "single",
+          "layout": {"pane": {"ref": "pane:3001"}},
+          "panes": [
+            {"id": null, "ref": "pane:3001", "index": 0, "selected_surface_ref": "surface:4002",
+             "surfaces": [{"ref": "surface:4001"}, {"ref": "surface:4002"}]}
+          ]
+        },
+        {
+          "id": "CCCCCCCC-0000-4000-8000-000000000003",
+          "title": "reordered",
+          "layout": {
+            "direction": "horizontal",
+            "split": 0.5,
+            "children": [{"pane": {"ref": "pane:3002"}}, {"pane": {"ref": "pane:3001"}}]
+          },
+          "panes": [
+            {"id": null, "ref": "pane:3001", "index": 0, "selected_surface_ref": "surface:5001", "surfaces": [{"ref": "surface:5001"}]},
+            {"id": null, "ref": "pane:3002", "index": 1, "selected_surface_ref": "surface:5002", "surfaces": [{"ref": "surface:5002"}]}
+          ]
+        },
+        {
+          "id": "DDDDDDDD-0000-4000-8000-000000000004",
+          "title": "no layout, no selection",
+          "layout": null,
+          "panes": [
+            {"id": null, "ref": "pane:6001", "index": 0, "selected_surface_ref": "", "surfaces": [{"ref": "surface:7001"}]}
+          ]
+        },
+        {
+          "id": "EEEEEEEE-0000-4000-8000-000000000005",
+          "title": "unusable surface ref",
+          "layout": {"pane": {"ref": "pane:8001"}},
+          "panes": [
+            {"id": null, "ref": "pane:8001", "index": 0, "selected_surface_ref": "surface:1; rm -rf /", "surfaces": []}
+          ]
+        },
+        {
+          "id": "FFFFFFFF-0000-4000-8000-000000000006",
+          "title": "empty",
+          "layout": null,
+          "panes": []
+        }
+      ]
+    }
+  ]
+}
