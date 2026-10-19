@@ -42,6 +42,8 @@ type Card struct {
 	Title   string `json:"title"`
 	Status  Status `json:"status"`
 	SinceMs int64  `json:"since_ms"`
+	// WS is the cmux workspace id. It stays inside the bridge and is never sent.
+	WS string `json:"-"`
 }
 
 type frame struct {
