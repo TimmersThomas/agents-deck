@@ -10,8 +10,9 @@ import (
 const maxLine = 4096
 
 // readLines calls fn with a private copy of every newline-terminated line of r
-// until r fails. Blank lines and lines of maxLine bytes or more are dropped.
-func readLines(r io.Reader, fn func([]byte)) {
+// until r fails and returns that error. Blank lines and lines of maxLine bytes or
+// more are dropped.
+func readLines(r io.Reader, fn func([]byte)) error {
 	br := bufio.NewReaderSize(r, maxLine)
 	skipping := false
 	for {
@@ -20,7 +21,7 @@ func readLines(r io.Reader, fn func([]byte)) {
 		case errors.Is(err, bufio.ErrBufferFull):
 			skipping = true
 		case err != nil:
-			return
+			return err
 		case skipping:
 			skipping = false
 		default:

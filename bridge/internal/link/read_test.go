@@ -2,6 +2,7 @@ package link
 
 import (
 	"context"
+	"errors"
 	"io"
 	"strings"
 	"sync"
@@ -41,6 +42,66 @@ func TestReadLines(t *testing.T) {
 				t.Errorf("%s: line %d differs", name, i)
 			}
 		}
+	}
+}
+
+type failingReader struct {
+	data string
+	err  error
+}
+
+func (f *failingReader) Read(p []byte) (int, error) {
+	if f.data == "" {
+		return 0, f.err
+	}
+	n := copy(p, f.data)
+	f.data = f.data[n:]
+	return n, nil
+}
+
+func TestReadLinesReturnsTheReadError(t *testing.T) {
+	sentinel := errors.New("port vanished")
+	var got []string
+	err := readLines(&failingReader{data: "a\n", err: sentinel}, func(b []byte) { got = append(got, string(b)) })
+	if !errors.Is(err, sentinel) {
+		t.Fatalf("err = %v, want the sentinel", err)
+	}
+	if len(got) != 1 || got[0] != "a" {
+		t.Fatalf("got %q before the failure", got)
+	}
+	if err := readLines(strings.NewReader("a\n"), func([]byte) {}); err != io.EOF {
+		t.Fatalf("err = %v, want io.EOF", err)
+	}
+}
+
+func TestSenderLogsOnceWhenTheReaderStops(t *testing.T) {
+	logs := captureLogs(t)
+	port, _ := newDuplex()
+	opened := make(chan struct{})
+	s := NewSender(func() (io.WriteCloser, error) { close(opened); return port, nil }, time.Hour)
+	s.OnLine(func([]byte) {})
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	done := make(chan struct{})
+	go func() { defer close(done); s.Run(ctx, make(chan []byte, 1)) }()
+
+	select {
+	case <-opened:
+	case <-time.After(2 * time.Second):
+		t.Fatal("port never opened")
+	}
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Run did not return")
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for !strings.Contains(logs.String(), "link: reader stopped: ") && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if got := strings.Count(logs.String(), "link: reader stopped: "); got != 1 {
+		t.Fatalf("%d reader-stopped logs, want 1; log:\n%s", got, logs.String())
 	}
 }
 

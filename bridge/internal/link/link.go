@@ -74,10 +74,10 @@ func (s *Sender) connect(ctx context.Context, frames <-chan []byte, latest []byt
 	return latest, stop
 }
 
-// startReader reads lines from port until it is closed; ports that cannot be read are ignored.
+// startReader reads lines from port until it stops and logs why; ports that cannot be read are ignored.
 func (s *Sender) startReader(port io.Writer) {
 	if r, ok := port.(io.Reader); ok && s.onLine != nil {
-		go readLines(r, s.onLine)
+		go func() { log.Printf("link: reader stopped: %v", readLines(r, s.onLine)) }()
 	}
 }
 
