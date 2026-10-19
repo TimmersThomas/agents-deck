@@ -27,17 +27,17 @@ func only(t *testing.T, s State) protocol.Card {
 
 func live(t *testing.T) State {
 	t.Helper()
-	s := Apply(State{}, hookAt("SessionStart", "S1", worktree, t0))
-	s = Apply(s, status("Idle", "S1", t0))
-	s = Apply(s, hookAt("UserPromptSubmit", "S1", worktree, at(time.Second)))
-	s = Apply(s, status("Running", "S1", at(time.Second)))
-	s = Apply(s, hookAt("Stop", "S1", worktree, at(time.Minute)))
-	return Apply(s, status("Idle", "S1", at(time.Minute)))
+	s := step(State{}, hookAt("SessionStart", "S1", worktree, t0))
+	s = step(s, status("Idle", "S1", t0))
+	s = step(s, hookAt("UserPromptSubmit", "S1", worktree, at(time.Second)))
+	s = step(s, status("Running", "S1", at(time.Second)))
+	s = step(s, hookAt("Stop", "S1", worktree, at(time.Minute)))
+	return step(s, status("Idle", "S1", at(time.Minute)))
 }
 
 func TestSessionEndMarksCardDone(t *testing.T) {
-	s := Apply(live(t), hookAt("SessionEnd", "S1", worktree, at(2*time.Minute)))
-	s = Apply(s, events.Event{Name: "feed.item.received", Hook: "SessionEnd", SurfaceID: "S1", At: at(2*time.Minute + time.Second)})
+	s := step(live(t), hookAt("SessionEnd", "S1", worktree, at(2*time.Minute)))
+	s = step(s, events.Event{Name: "feed.item.received", Hook: "SessionEnd", SurfaceID: "S1", At: at(2*time.Minute + time.Second)})
 	c := only(t, s)
 	if c.Status != protocol.Done || c.SinceMs != at(2*time.Minute).UnixMilli() || c.Title != "DEV-9-done" {
 		t.Fatalf("got %+v, want done since the first SessionEnd", c)
@@ -45,30 +45,30 @@ func TestSessionEndMarksCardDone(t *testing.T) {
 }
 
 func TestSurfaceClosedMarksCardDoneAndKeepsSince(t *testing.T) {
-	s := Apply(live(t), closed("S1", at(3*time.Minute)))
+	s := step(live(t), closed("S1", at(3*time.Minute)))
 	if c := only(t, s); c.Status != protocol.Done || c.SinceMs != at(3*time.Minute).UnixMilli() {
 		t.Fatalf("got %+v", c)
 	}
-	s = Apply(Apply(live(t), hookAt("SessionEnd", "S1", worktree, at(2*time.Minute))), closed("S1", at(3*time.Minute)))
+	s = step(step(live(t), hookAt("SessionEnd", "S1", worktree, at(2*time.Minute))), closed("S1", at(3*time.Minute)))
 	if c := only(t, s); c.SinceMs != at(2*time.Minute).UnixMilli() {
 		t.Fatalf("surface.closed moved since of a done card: %+v", c)
 	}
 }
 
 func TestEndWithoutCardIsIgnored(t *testing.T) {
-	s := Apply(State{}, closed("S9", t0))
-	s = Apply(s, hookAt("SessionEnd", "S9", worktree, t0))
+	s := step(State{}, closed("S9", t0))
+	s = step(s, hookAt("SessionEnd", "S9", worktree, t0))
 	if n := len(s.Cards()); n != 0 {
 		t.Fatalf("got %d cards, want none", n)
 	}
 }
 
 func TestTeardownNoiseDoesNotReviveDoneCard(t *testing.T) {
-	s := Apply(live(t), hookAt("SessionEnd", "S1", worktree, at(2*time.Minute)))
+	s := step(live(t), hookAt("SessionEnd", "S1", worktree, at(2*time.Minute)))
 	for _, label := range []string{"Idle", "Waiting", "API error", "Connection dropped"} {
-		s = Apply(s, status(label, "S1", at(2*time.Minute+time.Second)))
-		s = Apply(s, hookAt("Stop", "S1", worktree, at(2*time.Minute+time.Second)))
-		s = Apply(s, hookAt("Notification", "S1", worktree, at(3*time.Minute)))
+		s = step(s, status(label, "S1", at(2*time.Minute+time.Second)))
+		s = step(s, hookAt("Stop", "S1", worktree, at(2*time.Minute+time.Second)))
+		s = step(s, hookAt("Notification", "S1", worktree, at(3*time.Minute)))
 	}
 	if c := only(t, s); c.Status != protocol.Done {
 		t.Fatalf("teardown noise revived the card: %+v", c)
@@ -76,7 +76,7 @@ func TestTeardownNoiseDoesNotReviveDoneCard(t *testing.T) {
 }
 
 func TestDoneCardRevives(t *testing.T) {
-	ended := Apply(live(t), hookAt("SessionEnd", "S1", worktree, at(2*time.Minute)))
+	ended := step(live(t), hookAt("SessionEnd", "S1", worktree, at(2*time.Minute)))
 	cases := []struct {
 		name string
 		e    events.Event
@@ -89,7 +89,7 @@ func TestDoneCardRevives(t *testing.T) {
 		{"Needs input", status("Needs input", "S1", at(time.Hour)), protocol.Waiting},
 	}
 	for _, tc := range cases {
-		c := only(t, Apply(ended, tc.e))
+		c := only(t, step(ended, tc.e))
 		if c.Status != tc.want || c.SinceMs != at(time.Hour).UnixMilli() {
 			t.Errorf("%s: got %+v, want %s since the revival", tc.name, c, tc.want)
 		}
@@ -97,16 +97,16 @@ func TestDoneCardRevives(t *testing.T) {
 }
 
 func TestReviveHooksDoNotCreateCards(t *testing.T) {
-	s := Apply(State{}, hookAt("UserPromptSubmit", "S1", worktree, t0))
+	s := step(State{}, hookAt("UserPromptSubmit", "S1", worktree, t0))
 	if n := len(s.Cards()); n != 0 {
 		t.Fatalf("got %d cards, want none", n)
 	}
 }
 
 func TestDoneSortsLast(t *testing.T) {
-	s := Apply(State{}, status("Idle", "idle", t0))
-	s = Apply(s, status("Running", "ended", at(time.Hour)))
-	s = Apply(s, closed("ended", at(2*time.Hour)))
+	s := step(State{}, status("Idle", "idle", t0))
+	s = step(s, status("Running", "ended", at(time.Hour)))
+	s = step(s, closed("ended", at(2*time.Hour)))
 	cards := s.Cards()
 	if len(cards) != 2 || cards[0].ID != "idle" || cards[1].ID != "ended" {
 		t.Fatalf("order %+v, want idle then ended", cards)

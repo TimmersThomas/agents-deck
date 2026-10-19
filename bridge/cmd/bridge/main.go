@@ -65,13 +65,16 @@ func run(ctx context.Context, evs <-chan follow.Event, frames chan []byte, maxAg
 			if !ok {
 				return
 			}
-			s = state.Apply(s, e)
-			dirty = true
+			var changed bool
+			s, changed = state.Apply(s, e)
+			dirty = dirty || changed
 		case now := <-tick.C:
+			pruned := state.Prune(s, now, maxAge)
+			dirty = dirty || pruned.Len() != s.Len()
+			s = pruned
 			if !dirty && now.Sub(lastSent) < heartbeatEvery {
 				continue
 			}
-			s = state.Prune(s, now, maxAge)
 			b, err := protocol.Render(s.Cards(), now)
 			if err != nil {
 				log.Printf("render: %v", err)

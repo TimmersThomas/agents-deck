@@ -53,7 +53,16 @@ func withCard(s State, c protocol.Card) State {
 	return State{cards: cards, titles: s.titles}
 }
 
-func Apply(s State, e events.Event) State {
+// Apply folds e into s. changed reports whether the rendered cards differ: a new
+// card, or a different status, since or title on an existing one.
+func Apply(s State, e events.Event) (_ State, changed bool) {
+	before, had := s.card(e.SurfaceID)
+	next := apply(s, e)
+	after, has := next.card(e.SurfaceID)
+	return next, had != has || before != after
+}
+
+func apply(s State, e events.Event) State {
 	if e.SurfaceID == "" || len(e.SurfaceID) > protocol.MaxIDBytes {
 		return s
 	}
@@ -94,6 +103,18 @@ func (s State) title(id string) string {
 	return id
 }
 
+func (s State) card(id string) (protocol.Card, bool) {
+	c, ok := s.cards[id]
+	if ok {
+		c.Title = s.title(id)
+	}
+	return c, ok
+}
+
+// Len returns the number of cards.
+func (s State) Len() int { return len(s.cards) }
+
+// Cards returns the cards sorted by urgency, then newest status change, then id.
 func (s State) Cards() []protocol.Card {
 	out := make([]protocol.Card, 0, len(s.cards))
 	for id, c := range s.cards {

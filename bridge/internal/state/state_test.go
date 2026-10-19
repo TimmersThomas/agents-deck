@@ -30,7 +30,7 @@ func TestApplyMapsLabelsToStatus(t *testing.T) {
 		"Connection dropped": protocol.Error,
 	}
 	for label, want := range cases {
-		cards := Apply(State{}, status(label, "S1", t0)).Cards()
+		cards := step(State{}, status(label, "S1", t0)).Cards()
 		if len(cards) != 1 || cards[0].Status != want {
 			t.Errorf("%s: got %+v want %s", label, cards, want)
 		}
@@ -38,51 +38,51 @@ func TestApplyMapsLabelsToStatus(t *testing.T) {
 }
 
 func TestApplyIgnoresUnknownLabelSurfacelessAndHooksAlone(t *testing.T) {
-	s := Apply(State{}, status("Something new", "S1", t0))
-	s = Apply(s, status("Idle", "", t0))
-	s = Apply(s, hook("S1", "/w/DEV-1"))
+	s := step(State{}, status("Something new", "S1", t0))
+	s = step(s, status("Idle", "", t0))
+	s = step(s, hook("S1", "/w/DEV-1"))
 	if len(s.Cards()) != 0 {
 		t.Fatalf("expected no cards, got %+v", s.Cards())
 	}
 }
 
 func TestTitleFromHookEvenWhenItArrivesLate(t *testing.T) {
-	s := Apply(State{}, status("Running", "ABCDEFGHIJKL", t0))
+	s := step(State{}, status("Running", "ABCDEFGHIJKL", t0))
 	if got := s.Cards()[0].Title; got != "ABCDEFGH" {
 		t.Fatalf("fallback title %q", got)
 	}
-	s = Apply(s, hook("ABCDEFGHIJKL", "/w/worktrees/DEV-1-fix"))
+	s = step(s, hook("ABCDEFGHIJKL", "/w/worktrees/DEV-1-fix"))
 	if got := s.Cards()[0].Title; got != "DEV-1-fix" {
 		t.Fatalf("title %q", got)
 	}
 }
 
 func TestSinceOnlyChangesWithStatus(t *testing.T) {
-	s := Apply(State{}, status("Running", "S1", t0))
-	s = Apply(s, status("Running subagents", "S1", t0.Add(time.Minute)))
+	s := step(State{}, status("Running", "S1", t0))
+	s = step(s, status("Running subagents", "S1", t0.Add(time.Minute)))
 	if got := s.Cards()[0].SinceMs; got != t0.UnixMilli() {
 		t.Fatalf("since moved: %d", got)
 	}
-	s = Apply(s, status("Idle", "S1", t0.Add(2*time.Minute)))
+	s = step(s, status("Idle", "S1", t0.Add(2*time.Minute)))
 	if got := s.Cards()[0].SinceMs; got != t0.Add(2*time.Minute).UnixMilli() {
 		t.Fatalf("since not updated on status change: %d", got)
 	}
 }
 
 func TestApplyDoesNotMutateInput(t *testing.T) {
-	a := Apply(State{}, status("Idle", "S1", t0))
-	_ = Apply(a, status("Needs input", "S1", t0))
+	a := step(State{}, status("Idle", "S1", t0))
+	_ = step(a, status("Needs input", "S1", t0))
 	if a.Cards()[0].Status != protocol.Idle {
 		t.Fatal("input state was mutated")
 	}
 }
 
 func TestCardsSortedByUrgencyThenNewest(t *testing.T) {
-	s := Apply(State{}, status("Idle", "idle", t0))
-	s = Apply(s, status("Running", "work-old", t0))
-	s = Apply(s, status("Running", "work-new", t0.Add(time.Minute)))
-	s = Apply(s, status("API error", "err", t0))
-	s = Apply(s, status("Needs input", "wait", t0.Add(-time.Hour)))
+	s := step(State{}, status("Idle", "idle", t0))
+	s = step(s, status("Running", "work-old", t0))
+	s = step(s, status("Running", "work-new", t0.Add(time.Minute)))
+	s = step(s, status("API error", "err", t0))
+	s = step(s, status("Needs input", "wait", t0.Add(-time.Hour)))
 	var order []string
 	for _, c := range s.Cards() {
 		order = append(order, c.ID)
@@ -96,9 +96,9 @@ func TestCardsSortedByUrgencyThenNewest(t *testing.T) {
 }
 
 func TestPruneDropsStaleCardsOfAnyStatus(t *testing.T) {
-	s := Apply(State{}, status("Idle", "old-idle", t0))
-	s = Apply(s, status("Running", "old-run", t0))
-	s = Apply(s, status("Running", "fresh", t0.Add(12*time.Hour)))
+	s := step(State{}, status("Idle", "old-idle", t0))
+	s = step(s, status("Running", "old-run", t0))
+	s = step(s, status("Running", "fresh", t0.Add(12*time.Hour)))
 	s = Prune(s, t0.Add(13*time.Hour), 12*time.Hour)
 	cards := s.Cards()
 	if len(cards) != 1 || cards[0].ID != "fresh" {
@@ -107,9 +107,9 @@ func TestPruneDropsStaleCardsOfAnyStatus(t *testing.T) {
 }
 
 func TestHookDoesNotMutateInput(t *testing.T) {
-	a := Apply(State{}, hook("S1", "/w/DEV-1"))
-	a = Apply(a, status("Running", "S1", t0))
-	b := Apply(a, hook("S1", "/w/DEV-2"))
+	a := step(State{}, hook("S1", "/w/DEV-1"))
+	a = step(a, status("Running", "S1", t0))
+	b := step(a, hook("S1", "/w/DEV-2"))
 	if got := a.Cards()[0].Title; got != "DEV-1" {
 		t.Fatalf("input title mutated: %q", got)
 	}
@@ -119,7 +119,7 @@ func TestHookDoesNotMutateInput(t *testing.T) {
 }
 
 func TestPruneDoesNotMutateInput(t *testing.T) {
-	s := Apply(State{}, status("Running", "S1", t0))
+	s := step(State{}, status("Running", "S1", t0))
 	pruned := Prune(s, t0.Add(100*time.Hour), time.Minute)
 	if n := len(pruned.Cards()); n != 0 {
 		t.Fatalf("pruned state has %d cards", n)
@@ -130,8 +130,8 @@ func TestPruneDoesNotMutateInput(t *testing.T) {
 }
 
 func TestPruneKeepsTitleOfSurvivingCard(t *testing.T) {
-	s := Apply(State{}, status("Running", "S1", t0))
-	s = Apply(s, hook("S1", "/w/DEV-3"))
+	s := step(State{}, status("Running", "S1", t0))
+	s = step(s, hook("S1", "/w/DEV-3"))
 	s = Prune(s, t0, time.Hour)
 	cards := s.Cards()
 	if len(cards) != 1 || cards[0].Title != "DEV-3" {
@@ -140,8 +140,8 @@ func TestPruneKeepsTitleOfSurvivingCard(t *testing.T) {
 }
 
 func TestSameStatusAndTimeSortByID(t *testing.T) {
-	s := Apply(State{}, status("Idle", "b", t0))
-	s = Apply(s, status("Idle", "a", t0))
+	s := step(State{}, status("Idle", "b", t0))
+	s = step(s, status("Idle", "a", t0))
 	cards := s.Cards()
 	if len(cards) != 2 || cards[0].ID != "a" || cards[1].ID != "b" {
 		t.Fatalf("order %+v want a, b", cards)
@@ -149,9 +149,9 @@ func TestSameStatusAndTimeSortByID(t *testing.T) {
 }
 
 func TestHookOnExistingCardKeepsStatusAndSince(t *testing.T) {
-	s := Apply(State{}, status("Running", "S1", t0))
-	s = Apply(s, hook("S1", "/w/DEV-4"))
-	s = Apply(s, events.Event{Name: "agent.hook.Stop", Hook: "Stop", SurfaceID: "S1", Cwd: "/w/DEV-4", At: t0.Add(time.Hour)})
+	s := step(State{}, status("Running", "S1", t0))
+	s = step(s, hook("S1", "/w/DEV-4"))
+	s = step(s, events.Event{Name: "agent.hook.Stop", Hook: "Stop", SurfaceID: "S1", Cwd: "/w/DEV-4", At: t0.Add(time.Hour)})
 	c := s.Cards()[0]
 	if c.Status != protocol.Working {
 		t.Fatalf("status %s", c.Status)
@@ -167,20 +167,20 @@ func hookAt(name, surface, cwd string, at time.Time) events.Event {
 
 func TestTitleOnlyFromSessionStartAndPromptHooks(t *testing.T) {
 	const root = "/Users/u/projects/app/worktrees/DEV-7-title"
-	s := Apply(State{}, hookAt("SessionStart", "S1", root, t0))
-	s = Apply(s, status("Running", "S1", t0))
+	s := step(State{}, hookAt("SessionStart", "S1", root, t0))
+	s = step(s, status("Running", "S1", t0))
 	for i, h := range []struct{ name, cwd string }{
 		{"PreToolUse", root + "/src"},
 		{"Stop", root + "/.build"},
 		{"Notification", root + "/e2e"},
 		{"SubagentStop", root + "/src/pkg"},
 	} {
-		s = Apply(s, hookAt(h.name, "S1", h.cwd, t0.Add(time.Duration(i+1)*time.Second)))
+		s = step(s, hookAt(h.name, "S1", h.cwd, t0.Add(time.Duration(i+1)*time.Second)))
 		if got := s.Cards()[0].Title; got != "DEV-7-title" {
 			t.Fatalf("after %s in %s title = %q, want DEV-7-title", h.name, h.cwd, got)
 		}
 	}
-	s = Apply(s, hookAt("UserPromptSubmit", "S1", "/Users/u/projects/app/worktrees/DEV-8-next", t0.Add(time.Minute)))
+	s = step(s, hookAt("UserPromptSubmit", "S1", "/Users/u/projects/app/worktrees/DEV-8-next", t0.Add(time.Minute)))
 	if got := s.Cards()[0].Title; got != "DEV-8-next" {
 		t.Fatalf("prompt hook title = %q, want DEV-8-next", got)
 	}
@@ -188,8 +188,8 @@ func TestTitleOnlyFromSessionStartAndPromptHooks(t *testing.T) {
 
 func TestOversizedSurfaceIDIsIgnored(t *testing.T) {
 	long := strings.Repeat("x", protocol.MaxIDBytes+1)
-	s := Apply(State{}, status("Running", long, t0))
-	s = Apply(s, status("Running", strings.Repeat("y", protocol.MaxIDBytes), t0))
+	s := step(State{}, status("Running", long, t0))
+	s = step(s, status("Running", strings.Repeat("y", protocol.MaxIDBytes), t0))
 	if cards := s.Cards(); len(cards) != 1 || cards[0].ID[0] != 'y' {
 		t.Fatalf("got %+v, want only the card with a %d-byte id", cards, protocol.MaxIDBytes)
 	}
