@@ -16,7 +16,7 @@
 - Only fixed cmux sub-commands are run, and every argument is validated first: workspace id matches `^[0-9A-Fa-f-]{36}$`, surface ref matches `^surface:[0-9]+$`. Logs never contain raw serial input.
 - The cmux socket is only reachable from processes started inside cmux: the bridge must be launched from a cmux terminal for focus to work. `--act=false` disables actions; `--stdout` implies no actions.
 - Frames must not change on the wire: the workspace id is internal (`json:"-"`) and a workspace-only change must not trigger a frame.
-- One focus at a time: a tap while a focus is running is dropped and logged.
+- One focus at a time: while a focus runs one further tap is queued and later taps are dropped and logged.
 - Files under 200 lines (production), functions under 50 lines, errors never swallowed, no mutation of shared state.
 - Commits: conventional style, trailer `Co-Authored-By: ...` per the controller's instruction.
 
