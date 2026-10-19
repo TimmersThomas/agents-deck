@@ -54,7 +54,7 @@ func withCard(s State, c protocol.Card) State {
 }
 
 func Apply(s State, e events.Event) State {
-	if e.SurfaceID == "" {
+	if e.SurfaceID == "" || len(e.SurfaceID) > protocol.MaxIDBytes {
 		return s
 	}
 	if titleHooks[e.Hook] && e.Cwd != "" {

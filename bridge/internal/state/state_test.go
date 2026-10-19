@@ -1,6 +1,7 @@
 package state
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -182,5 +183,14 @@ func TestTitleOnlyFromSessionStartAndPromptHooks(t *testing.T) {
 	s = Apply(s, hookAt("UserPromptSubmit", "S1", "/Users/u/projects/app/worktrees/DEV-8-next", t0.Add(time.Minute)))
 	if got := s.Cards()[0].Title; got != "DEV-8-next" {
 		t.Fatalf("prompt hook title = %q, want DEV-8-next", got)
+	}
+}
+
+func TestOversizedSurfaceIDIsIgnored(t *testing.T) {
+	long := strings.Repeat("x", protocol.MaxIDBytes+1)
+	s := Apply(State{}, status("Running", long, t0))
+	s = Apply(s, status("Running", strings.Repeat("y", protocol.MaxIDBytes), t0))
+	if cards := s.Cards(); len(cards) != 1 || cards[0].ID[0] != 'y' {
+		t.Fatalf("got %+v, want only the card with a %d-byte id", cards, protocol.MaxIDBytes)
 	}
 }
