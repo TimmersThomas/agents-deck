@@ -25,8 +25,7 @@ static const char *TAG = "board";
 
 static SemaphoreHandle_t lvgl_mux = NULL;
 static SemaphoreHandle_t flush_done_semaphore = NULL;
-static uint8_t *lvgl_dest = NULL;
-static uint16_t *trans_buf_1;
+static uint16_t *trans_buf[2];
 
 #define LCD_BIT_PER_PIXEL 16
 #define BYTES_PER_PIXEL (LV_COLOR_FORMAT_GET_SIZE(LV_COLOR_FORMAT_RGB565))
@@ -37,6 +36,19 @@ static uint16_t *trans_buf_1;
 #define LVGL_TASK_MIN_DELAY_MS 10
 #define LVGL_TASK_STACK_SIZE (8 * 1024)
 #define LVGL_TASK_PRIORITY 2
+
+// The panel is 172x640 portrait and LVGL renders 640x172 landscape. A flush rotates the frame
+// 90 degrees clockwise (and byte-swaps it for the panel) in chunks of CHUNK_ROWS physical rows,
+// straight from the render buffer into two small DMA buffers, so a chunk is rotated while the
+// previous one is still on the wire.
+#define LW EXAMPLE_LCD_V_RES
+#define LH EXAMPLE_LCD_H_RES
+#define CHUNK_ROWS 64
+#define INTERNAL_HEADROOM (96 * 1024)
+
+// 1: upright with the USB cable on the right; 0: upright with the cable on the left (the Waveshare demo).
+// It flips the picture and the touch axes together.
+#define BOARD_FLIP_180 1
 
 static const axs15231b_lcd_init_cmd_t lcd_init_cmds[] = {
 	{0x11, (uint8_t[]){0x00}, 0, 100},
@@ -49,59 +61,97 @@ static bool notify_lvgl_flush_ready(esp_lcd_panel_io_handle_t panel_io, esp_lcd_
 	return false;
 }
 
+#if BOARD_FLIP_180
+// rotate_chunk fills dst (LH x CHUNK_ROWS) with physical rows py0..py0+CHUNK_ROWS-1:
+// logical (lx, ly) goes to physical column LH-1-ly, physical row lx.
+static void rotate_chunk(const uint16_t *src, uint16_t *dst, int py0) {
+	for (int ly = 0; ly < LH; ly++) {
+		const uint16_t *s = src + ly * LW + py0;
+		uint16_t *d = dst + (LH - 1 - ly);
+		for (int r = 0; r < CHUNK_ROWS; r++) {
+			*d = __builtin_bswap16(s[r]);
+			d += LH;
+		}
+	}
+}
+#else
+// rotate_chunk fills dst (LH x CHUNK_ROWS) with physical rows py0..py0+CHUNK_ROWS-1 (LVGL's
+// rotation 90): logical (lx, ly) goes to physical column ly, physical row LW-1-lx.
+static void rotate_chunk(const uint16_t *src, uint16_t *dst, int py0) {
+	for (int ly = 0; ly < LH; ly++) {
+		const uint16_t *s = src + ly * LW + (LW - 1 - py0);
+		uint16_t *d = dst + ly;
+		for (int r = 0; r < CHUNK_ROWS; r++) {
+			*d = __builtin_bswap16(s[-r]);
+			d += LH;
+		}
+	}
+}
+#endif
+
 static void lvgl_flush_cb(lv_display_t *disp, const lv_area_t *area, uint8_t *color_p) {
 	esp_lcd_panel_handle_t panel_handle = (esp_lcd_panel_handle_t)lv_display_get_user_data(disp);
-	lv_draw_sw_rgb565_swap(color_p, lv_area_get_width(area) * lv_area_get_height(area));
-	lv_display_rotation_t rotation = lv_display_get_rotation(disp);
-	lv_area_t rotated_area;
-	if (rotation != LV_DISPLAY_ROTATION_0) {
-		lv_color_format_t cf = lv_display_get_color_format(disp);
-		rotated_area = *area;
-		lv_display_rotate_area(disp, &rotated_area);
-		uint32_t src_stride = lv_draw_buf_width_to_stride(lv_area_get_width(area), cf);
-		uint32_t dest_stride = lv_draw_buf_width_to_stride(lv_area_get_width(&rotated_area), cf);
-		int32_t src_w = lv_area_get_width(area);
-		int32_t src_h = lv_area_get_height(area);
-		lv_draw_sw_rotate(color_p, lvgl_dest, src_w, src_h, src_stride, dest_stride, rotation, cf);
-		area = &rotated_area;
+	const uint16_t *src = (const uint16_t *)color_p;
+	for (int c = 0; c < LW / CHUNK_ROWS; c++) {
+		xSemaphoreTake(flush_done_semaphore, portMAX_DELAY); // a DMA buffer is free again
+		uint16_t *buf = trans_buf[c & 1];
+		rotate_chunk(src, buf, c * CHUNK_ROWS);
+		esp_lcd_panel_draw_bitmap(panel_handle, 0, c * CHUNK_ROWS, LH, (c + 1) * CHUNK_ROWS, buf);
 	}
-
-	const int flush_coun = (LVGL_SPIRAM_BUFF_LEN / LVGL_DMA_BUFF_LEN);
-	const int offgap = (EXAMPLE_LCD_V_RES / flush_coun);
-	const int dmalen = (LVGL_DMA_BUFF_LEN / 2);
-	int offsetx1 = 0;
-	int offsety1 = 0;
-	int offsetx2 = EXAMPLE_LCD_H_RES;
-	int offsety2 = offgap;
-
-	uint16_t *map = (uint16_t *)lvgl_dest;
-	xSemaphoreGive(flush_done_semaphore);
-	for (int i = 0; i < flush_coun; i++) {
-		xSemaphoreTake(flush_done_semaphore, portMAX_DELAY);
-		memcpy(trans_buf_1, map, LVGL_DMA_BUFF_LEN);
-		esp_lcd_panel_draw_bitmap(panel_handle, offsetx1, offsety1, offsetx2, offsety2, trans_buf_1);
-		offsety1 += offgap;
-		offsety2 += offgap;
-		map += dmalen;
-	}
-	xSemaphoreTake(flush_done_semaphore, portMAX_DELAY);
-	lv_disp_flush_ready(disp);
+	for (int i = 0; i < 2; i++) xSemaphoreTake(flush_done_semaphore, portMAX_DELAY); // all sent
+	for (int i = 0; i < 2; i++) xSemaphoreGive(flush_done_semaphore);
+	lv_display_flush_ready(disp);
 }
 
+static volatile board_touch_t last_touch = {.min_x = INT16_MAX, .max_x = INT16_MIN, .min_y = INT16_MAX, .max_y = INT16_MIN};
+
+board_touch_t board_last_touch(void) {
+	return last_touch;
+}
+
+static void record_touch(int16_t raw_x, int16_t raw_y, int16_t x, int16_t y, bool pressed) {
+	board_touch_t t = last_touch;
+	if (pressed && !t.pressed) {
+		t.down_raw_x = raw_x;
+		t.down_raw_y = raw_y;
+	}
+	if (pressed) {
+		t.raw_x = raw_x, t.raw_y = raw_y, t.x = x, t.y = y;
+		if (raw_x < t.min_x) t.min_x = raw_x;
+		if (raw_x > t.max_x) t.max_x = raw_x;
+		if (raw_y < t.min_y) t.min_y = raw_y;
+		if (raw_y > t.max_y) t.max_y = raw_y;
+	}
+	t.pressed = pressed;
+	last_touch = t;
+}
+
+// The touch controller reports in panel pixels, as the Waveshare example's portrait branch shows: the
+// native panel point is (rawY, 640 - rawX), raw X being the long axis. LVGL rotates pointer input
+// itself for a rotated display, so this feeds native coordinates; the 180 degree variant of the
+// picture needs the point turned 180 degrees as well because LVGL assumes its own rotation.
 static void touch_read_cb(lv_indev_t *indev, lv_indev_data_t *indevData) {
 	uint8_t read_touchpad_cmd[11] = {0xb5, 0xab, 0xa5, 0x5a, 0x0, 0x0, 0x0, 0x0e, 0x0, 0x0, 0x0};
 	uint8_t buff[32] = {0};
 	ESP_ERROR_CHECK_WITHOUT_ABORT(i2c_master_write_read_dev(disp_touch_dev_handle, read_touchpad_cmd, 11, buff, 32));
-	uint16_t pointX = (((uint16_t)buff[2] & 0x0f) << 8) | (uint16_t)buff[3];
-	uint16_t pointY = (((uint16_t)buff[4] & 0x0f) << 8) | (uint16_t)buff[5];
+	uint16_t rawX = (((uint16_t)buff[2] & 0x0f) << 8) | (uint16_t)buff[3];
+	uint16_t rawY = (((uint16_t)buff[4] & 0x0f) << 8) | (uint16_t)buff[5];
 	if (buff[1] > 0 && buff[1] < 5) {
+		if (rawX > LW) rawX = LW;
+		if (rawY > LH) rawY = LH;
+		int px = rawY;
+		int py = LW - rawX;
+#if BOARD_FLIP_180
+		px = LH - px;
+		py = LW - py;
+#endif
 		indevData->state = LV_INDEV_STATE_PRESSED;
-		if (pointX > EXAMPLE_LCD_H_RES) pointX = EXAMPLE_LCD_H_RES;
-		if (pointY > EXAMPLE_LCD_V_RES) pointY = EXAMPLE_LCD_V_RES;
-		indevData->point.x = (EXAMPLE_LCD_H_RES - pointX);
-		indevData->point.y = (EXAMPLE_LCD_V_RES - pointY);
+		indevData->point.x = px;
+		indevData->point.y = py;
+		record_touch((int16_t)rawX, (int16_t)rawY, (int16_t)px, (int16_t)py, true);
 	} else {
 		indevData->state = LV_INDEV_STATE_RELEASED;
+		record_touch(0, 0, 0, 0, false);
 	}
 }
 
@@ -187,16 +237,27 @@ static void lvgl_init(esp_lcd_panel_handle_t panel) {
 	lv_display_t *disp = lv_display_create(EXAMPLE_LCD_H_RES, EXAMPLE_LCD_V_RES);
 	lv_display_set_flush_cb(disp, lvgl_flush_cb);
 
-	uint8_t *buffer_1 = (uint8_t *)heap_caps_malloc(BUFF_SIZE, MALLOC_CAP_SPIRAM);
-	assert(buffer_1);
-	uint8_t *buffer_2 = (uint8_t *)heap_caps_malloc(BUFF_SIZE, MALLOC_CAP_SPIRAM);
-	assert(buffer_2);
-	trans_buf_1 = (uint16_t *)heap_caps_malloc(LVGL_DMA_BUFF_LEN, MALLOC_CAP_DMA);
-	assert(trans_buf_1);
+	for (int i = 0; i < 2; i++) {
+		trans_buf[i] = (uint16_t *)heap_caps_malloc(LVGL_DMA_BUFF_LEN, MALLOC_CAP_DMA);
+		assert(trans_buf[i]);
+	}
+	// Rendering into internal RAM is much faster than into PSRAM, so use one internal frame buffer
+	// when it leaves room for the tasks; otherwise fall back to two PSRAM buffers.
+	uint8_t *buffer_1 = NULL, *buffer_2 = NULL;
+	if (heap_caps_get_free_size(MALLOC_CAP_INTERNAL) > BUFF_SIZE + INTERNAL_HEADROOM) {
+		buffer_1 = (uint8_t *)heap_caps_malloc(BUFF_SIZE, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+	}
+	if (buffer_1) {
+		ESP_LOGI(TAG, "draw buffer in internal RAM");
+	} else {
+		ESP_LOGI(TAG, "draw buffers in PSRAM");
+		buffer_1 = (uint8_t *)heap_caps_malloc(BUFF_SIZE, MALLOC_CAP_SPIRAM);
+		assert(buffer_1);
+		buffer_2 = (uint8_t *)heap_caps_malloc(BUFF_SIZE, MALLOC_CAP_SPIRAM);
+		assert(buffer_2);
+	}
 	lv_display_set_buffers(disp, buffer_1, buffer_2, BUFF_SIZE, LV_DISPLAY_RENDER_MODE_FULL);
 	lv_display_set_user_data(disp, panel);
-	lvgl_dest = (uint8_t *)heap_caps_malloc(BUFF_SIZE, MALLOC_CAP_SPIRAM);
-	assert(lvgl_dest);
 	lv_display_set_rotation(disp, LV_DISPLAY_ROTATION_90);
 
 	lv_indev_t *touch_indev = lv_indev_create();
@@ -206,7 +267,7 @@ static void lvgl_init(esp_lcd_panel_handle_t panel) {
 
 void board_init(void) {
 	lcd_bl_pwm_bsp_init(LCD_PWM_MODE_255);
-	flush_done_semaphore = xSemaphoreCreateBinary();
+	flush_done_semaphore = xSemaphoreCreateCounting(2, 2);
 	assert(flush_done_semaphore);
 	touch_i2c_master_Init();
 

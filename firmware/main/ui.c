@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "board.h"
 #include "esp_timer.h"
 #include "lvgl.h"
 
@@ -14,7 +15,8 @@
 #define CARD_H (SCREEN_H - 2 * PAD)
 #define BAR_W 6
 #define CARD_PAD 10
-#define INNER_W (CARD_W - BAR_W - 2 * CARD_PAD)
+#define TEXT_X 12
+#define INNER_W (CARD_W - 2 * CARD_PAD - TEXT_X)
 #define TITLE_LINES 3
 #define STALE_MS 35000
 #define REFRESH_MS 1000
@@ -22,15 +24,16 @@
 #define COLOR_SCREEN 0x0B0F14
 #define COLOR_CARD 0x1F2937
 #define COLOR_CARD_PRESSED 0x374151
+#define COLOR_CARD_DONE 0x141920
 #define COLOR_TEXT 0xE5E7EB
 #define COLOR_DIM 0x6B7280
 
 typedef struct {
-	lv_obj_t *card, *title, *status, *age;
+	lv_obj_t *card, *bar, *title, *status, *age;
 } card_widget_t;
 
 static card_widget_t w[CARDS_MAX];
-static lv_obj_t *row, *overlay, *overlay_label, *empty_label, *more_label, *stats_label;
+static lv_obj_t *row, *overlay, *overlay_label, *empty_label, *more_label, *stats_label, *touch_label;
 static ui_tap_cb_t tap_cb;
 static frame_t shown;
 static int64_t rx_ms = -1;
@@ -78,19 +81,26 @@ static void make_card(int i) {
 	lv_obj_set_style_radius(c->card, 12, 0);
 	lv_obj_set_style_bg_color(c->card, lv_color_hex(COLOR_CARD), 0);
 	lv_obj_set_style_bg_color(c->card, lv_color_hex(COLOR_CARD_PRESSED), LV_STATE_PRESSED);
-	lv_obj_set_style_border_width(c->card, BAR_W, 0);
-	lv_obj_set_style_border_side(c->card, LV_BORDER_SIDE_LEFT, 0);
+	lv_obj_set_style_border_width(c->card, 0, 0);
 	lv_obj_set_style_pad_all(c->card, CARD_PAD, 0);
 	lv_obj_add_event_cb(c->card, card_clicked, LV_EVENT_CLICKED, (void *)(intptr_t)i);
+
+	c->bar = lv_obj_create(c->card);
+	lv_obj_set_scrollable(c->bar, false);
+	lv_obj_set_size(c->bar, BAR_W, CARD_H - 44);
+	lv_obj_set_style_radius(c->bar, BAR_W / 2, 0);
+	lv_obj_set_style_border_width(c->bar, 0, 0);
+	lv_obj_set_style_pad_all(c->bar, 0, 0);
+	lv_obj_align(c->bar, LV_ALIGN_LEFT_MID, -CARD_PAD + 2, 0);
 
 	c->title = make_label(c->card, &lv_font_montserrat_16, COLOR_TEXT);
 	lv_label_set_long_mode(c->title, LV_LABEL_LONG_MODE_DOTS);
 	lv_obj_set_width(c->title, INNER_W);
 	lv_obj_set_height(c->title, TITLE_LINES * lv_font_get_line_height(&lv_font_montserrat_16));
-	lv_obj_align(c->title, LV_ALIGN_TOP_LEFT, 0, 0);
+	lv_obj_align(c->title, LV_ALIGN_TOP_LEFT, TEXT_X, 0);
 
 	c->status = make_label(c->card, &lv_font_montserrat_14, COLOR_DIM);
-	lv_obj_align(c->status, LV_ALIGN_BOTTOM_LEFT, 0, 0);
+	lv_obj_align(c->status, LV_ALIGN_BOTTOM_LEFT, TEXT_X, 0);
 	c->age = make_label(c->card, &lv_font_montserrat_14, COLOR_DIM);
 	lv_obj_align(c->age, LV_ALIGN_BOTTOM_RIGHT, 0, 0);
 	set_hidden(c->card, true);
@@ -102,9 +112,11 @@ static void fill_card(int i, const card_t *c, int64_t age_ms) {
 	set_text(w[i].title, c->title);
 	set_text(w[i].status, status_label(c->status));
 	set_text(w[i].age, age);
-	lv_obj_set_style_border_color(w[i].card, status_color(c->status), 0);
+	bool done = c->status == STATUS_DONE;
+	lv_obj_set_style_bg_color(w[i].bar, status_color(c->status), 0);
+	lv_obj_set_style_bg_color(w[i].card, lv_color_hex(done ? COLOR_CARD_DONE : COLOR_CARD), 0);
+	lv_obj_set_style_text_color(w[i].title, lv_color_hex(done ? COLOR_DIM : COLOR_TEXT), 0);
 	lv_obj_set_style_text_color(w[i].status, status_color(c->status), 0);
-	lv_obj_set_style_opa(w[i].card, c->status == STATUS_DONE ? LV_OPA_60 : LV_OPA_COVER, 0);
 }
 
 // refresh updates ages and the no-bridge / empty overlays from the stored frame.
@@ -119,6 +131,14 @@ static void refresh(void) {
 
 static void refresh_timer(lv_timer_t *t) {
 	refresh();
+}
+
+static void touch_timer(lv_timer_t *t) {
+	board_touch_t p = board_last_touch();
+	char b[160];
+	snprintf(b, sizeof b, "%s down %d,%d  last %d,%d -> %d,%d\nX %d..%d  Y %d..%d", p.pressed ? "DOWN" : "up", p.down_raw_x,
+	         p.down_raw_y, p.raw_x, p.raw_y, p.x, p.y, p.min_x, p.max_x, p.min_y, p.max_y);
+	set_text(touch_label, b);
 }
 
 static lv_obj_t *make_overlay(void) {
@@ -165,6 +185,10 @@ void ui_init(ui_tap_cb_t on_tap) {
 
 	stats_label = make_label(scr, &lv_font_montserrat_12, COLOR_DIM);
 	lv_obj_align(stats_label, LV_ALIGN_BOTTOM_RIGHT, -4, 0);
+
+	touch_label = make_label(scr, &lv_font_montserrat_12, 0xF472B6);
+	lv_obj_align(touch_label, LV_ALIGN_TOP_LEFT, 4, 0);
+	lv_timer_create(touch_timer, 50, NULL);
 
 	overlay = make_overlay();
 	lv_timer_create(refresh_timer, REFRESH_MS, NULL);
